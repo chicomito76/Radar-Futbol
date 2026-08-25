@@ -1,0 +1,10 @@
+{
+  "name": "Radar Fútbol",
+  "short_name": "Radar Fútbol",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09070c",
+  "theme_color": "#8d103c",
+  "description": "Predicciones prepartido de fútbol con actualización al abrir."
+}
