@@ -46,8 +46,7 @@ button,input{font:inherit}.wrap{max-width:470px;margin:0 auto;padding:18px 14px 
   <div class="subtitle">Hora de Chile · formato 24 h · prestigio histórico: 0%</div>
 
   <div class="notice">
-    <b>Optimizado para el plan gratuito:</b> al abrir la app se realizan <b>0 consultas deportivas</b>.
-    Sólo se consulta cuando buscas un club y eliges el equipo a analizar.
+    <b>Optimizado para el plan gratuito:</b> al abrir la app se realizan <b>0 consultas deportivas</b>. Buscar un club usa 1 consulta y analizar el partido seleccionado usa hasta 6.
   </div>
 
   <section class="panel">
@@ -122,6 +121,7 @@ function render(p){
       Forma ${p.local}: ${p.forma_local?p.forma_local.split("").join(" · "):"—"}<br>
       Forma ${p.visita}: ${p.forma_visita?p.forma_visita.split("").join(" · "):"—"}<br>
       Árbitro: ${p.arbitro??"No informado"}<br>
+      Bajas registradas: ${p.local} ${p.bajas_local??0} · ${p.visita} ${p.bajas_visita??0}<br>
       Calidad de datos: ${p.calidad_datos}%<br>
       Actualizado: ${p.actualizado_chile} · hora Chile<br>
       Consultas API-Sports utilizadas: ${p.consultas_api_sports??0}
@@ -179,7 +179,13 @@ $("searchForm").addEventListener("submit",async e=>{
             $("status").textContent=`Análisis completo · ${p.consultas_api_sports} consultas`;
           }
         }catch(err){
-          $("content").innerHTML='<div class="error">No se pudo completar el análisis. Si acabas de analizar otro equipo, espera al menos 1 minuto antes de intentar un partido diferente.</div>';
+          let message="No se pudo completar el análisis.";
+          try{
+            const raw=String(err.message||"");
+            const parsed=JSON.parse(raw);
+            if(parsed.detail)message=parsed.detail;
+          }catch(_){}
+          $("content").innerHTML=`<div class="error">${message}</div>`;
           $("status").textContent="Error de consulta";
         }
       });
