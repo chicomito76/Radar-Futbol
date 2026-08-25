@@ -30,7 +30,7 @@ TZ = ZoneInfo("America/Santiago")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
 
-app = FastAPI(title=APP_NAME, version="3.0-optimizada")
+app = FastAPI(title=APP_NAME, version="3.1-optimizada-6-consultas")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,6 +45,9 @@ app.add_middleware(
 CACHE: dict[str, tuple[float, Any]] = {}
 SEARCH_TTL = 15 * 60
 ANALYSIS_TTL = 10 * 60
+ANALYSIS_COOLDOWN = 65
+LAST_ANALYSIS_AT = 0.0
+LAST_ANALYSIS_TEAM = None
 
 def cache_read(key: str, ttl: int):
     item = CACHE.get(key)
@@ -217,6 +220,20 @@ def extract_1x2_market(odds_data: dict[str, Any]):
         pass
     return None
 
+def injury_counts(data: dict[str, Any], home_id: int, away_id: int) -> tuple[int, int]:
+    home_count = 0
+    away_count = 0
+    for item in (data or {}).get("response", []):
+        try:
+            tid = int((item.get("team") or {}).get("id"))
+        except Exception:
+            continue
+        if tid == int(home_id):
+            home_count += 1
+        elif tid == int(away_id):
+            away_count += 1
+    return home_count, away_count
+
 async def recent_context(home: str, away: str, referee: str, competition: str, date_text: str):
     """
     OPCIONAL. No consume cuota API-Sports.
@@ -271,7 +288,7 @@ async def health():
     return {
         "ok": True,
         "app": APP_NAME,
-        "version": "3.0-optimizada",
+        "version": "3.1-optimizada-6-consultas",
         "hora_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
         "datos_deportivos": bool(API_SPORTS_KEY),
         "openai_contexto": bool(OPENAI_API_KEY),
@@ -313,6 +330,18 @@ async def team_next(team_id: int):
         cached["consultas_api_sports"] = 0
         return cached
 
+    global LAST_ANALYSIS_AT, LAST_ANALYSIS_TEAM
+    elapsed = time.time() - LAST_ANALYSIS_AT
+    if LAST_ANALYSIS_AT and team_id != LAST_ANALYSIS_TEAM and elapsed < ANALYSIS_COOLDOWN:
+        wait = max(1, math.ceil(ANALYSIS_COOLDOWN - elapsed))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Espera {wait} segundos antes de analizar un equipo diferente."
+        )
+
+    LAST_ANALYSIS_AT = time.time()
+    LAST_ANALYSIS_TEAM = team_id
+
     # Consulta 1 del análisis: próximo partido.
     fixture_data = await api_get(
         "fixtures",
@@ -337,34 +366,24 @@ async def team_next(team_id: int):
         except Exception:
             return {}
 
-    # Consultas 2 a 8 del análisis profundo.
-    # Total al seleccionar equipo: 8 respuestas API-Sports.
-    pred, standings, home_raw, away_raw, odds, injuries, lineups = await asyncio.gather(
-        safe(api_get("predictions", {"fixture": fixture_id})),
+    # Consultas 2 a 6 del análisis profundo.
+    # Total al seleccionar equipo: 6 respuestas API-Sports.
+    # Se eliminan "predictions" y "lineups" para mantener margen bajo el límite de 10/min.
+    standings, home_raw, away_raw, odds, injuries = await asyncio.gather(
         safe(api_get("standings", {"league": league_id, "season": season})),
         safe(api_get("teams/statistics", {"league": league_id, "season": season, "team": home_id})),
         safe(api_get("teams/statistics", {"league": league_id, "season": season, "team": away_id})),
         safe(api_get("odds", {"fixture": fixture_id})),
         safe(api_get("injuries", {"fixture": fixture_id})),
-        safe(api_get("fixtures/lineups", {"fixture": fixture_id})),
     )
 
     home_stats = team_stats(home_raw)
     away_stats = team_stats(away_raw)
+    home_injuries, away_injuries = injury_counts(injuries, home_id, away_id)
 
     home_rank, table_size = standing_rank(standings, home_id)
     away_rank, table_size2 = standing_rank(standings, away_id)
     table_size = table_size or table_size2
-
-    provider_percent = {}
-    try:
-        provider_percent = pred["response"][0]["predictions"]["percent"]
-    except Exception:
-        pass
-
-    ph = pct(provider_percent.get("home"), 33.5)
-    pd = pct(provider_percent.get("draw"), 31.0)
-    pa = pct(provider_percent.get("away"), 35.5)
 
     home_strength = (
         0.40 * home_stats["form_score"]
@@ -372,12 +391,14 @@ async def team_next(team_id: int):
         + 0.20 * (home_stats["gf"] - home_stats["ga"] + 1.5)
         + 0.15 * (table_adjust(home_rank, table_size) + 1)
         + 0.18  # localía
+        - 0.025 * min(home_injuries, 5)
     )
     away_strength = (
         0.40 * away_stats["form_score"]
         + 0.25 * away_stats["ppg"]
         + 0.20 * (away_stats["gf"] - away_stats["ga"] + 1.5)
         + 0.15 * (table_adjust(away_rank, table_size) + 1)
+        - 0.025 * min(away_injuries, 5)
     )
 
     z = home_strength - away_strength
@@ -389,13 +410,12 @@ async def team_next(team_id: int):
     market = extract_1x2_market(odds)
     if market:
         oh, od, oa = market
-        fh = 0.45 * ph + 0.40 * mh + 0.15 * oh
-        fd = 0.45 * pd + 0.40 * md + 0.15 * od
-        fa = 0.45 * pa + 0.40 * ma + 0.15 * oa
+        # Modelo propio 75% + consenso de mercado 25%.
+        fh = 0.75 * mh + 0.25 * oh
+        fd = 0.75 * md + 0.25 * od
+        fa = 0.75 * ma + 0.25 * oa
     else:
-        fh = 0.55 * ph + 0.45 * mh
-        fd = 0.55 * pd + 0.45 * md
-        fa = 0.55 * pa + 0.45 * ma
+        fh, fd, fa = mh, md, ma
 
     fh, fd, fa = normalize3(fh, fd, fa)
 
@@ -455,9 +475,9 @@ async def team_next(team_id: int):
 
     signals = sum(
         bool(item.get("response"))
-        for item in [pred, standings, home_raw, away_raw, odds, injuries, lineups]
+        for item in [standings, home_raw, away_raw, odds, injuries]
     )
-    quality = round(signals / 7 * 85)
+    quality = round(signals / 5 * 85)
     if context:
         quality = round(0.85 * quality + 0.15 * float(context.get("calidad_contexto") or 0))
     quality = int(clamp(quality, 0, 100))
@@ -470,8 +490,7 @@ async def team_next(team_id: int):
         }
 
     warnings = []
-    if not lineups.get("response"):
-        warnings.append("Alineaciones confirmadas aún no disponibles.")
+    warnings.append("Alineaciones no se consultan automáticamente para ahorrar cuota API-Sports.")
     if not odds.get("response"):
         warnings.append("Cuotas no disponibles para este partido.")
     if not context:
@@ -496,12 +515,14 @@ async def team_next(team_id: int):
         "forma_visita": away_stats["form"],
         "tabla_local": home_rank,
         "tabla_visita": away_rank,
+        "bajas_local": home_injuries,
+        "bajas_visita": away_injuries,
         "calidad_datos": quality,
         "actualizado_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
         "contexto": context.get("resumen", "") if context else "",
         "advertencias": warnings,
         "cache": False,
-        "consultas_api_sports": 8,
+        "consultas_api_sports": 6,
     }
 
     cache_write(team_cache_key, result)
