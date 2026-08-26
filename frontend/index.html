@@ -5,96 +5,76 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#8d103c">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Radar Fútbol">
-<title>Radar Fútbol</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
+<title>Radar Fútbol</title>
 <style>
-:root{
-  --bg:#09070c;--bg2:#130914;--panel:#18101b;--panel2:#211222;--line:#4a2138;
-  --txt:#fff8fc;--muted:#c8b5c1;--mag:#d0006f;--mag2:#ff2b8f;--crimson:#9f1239;
-  --green:#31d97d;--yellow:#f8cb4f;--red:#ff566f
-}
-*{box-sizing:border-box}
-body{margin:0;color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Arial,sans-serif;background:radial-gradient(circle at 100% 0%,rgba(208,0,111,.23),transparent 33%),radial-gradient(circle at 0% 20%,rgba(159,18,57,.14),transparent 30%),linear-gradient(180deg,var(--bg),var(--bg2) 48%,var(--bg));min-height:100vh}
-button,input{font:inherit}.wrap{max-width:470px;margin:0 auto;padding:18px 14px 34px}
-.brand{display:flex;justify-content:space-between;align-items:center;gap:12px}.title{font-weight:950;font-size:28px;letter-spacing:-.6px}.title span{color:var(--mag2)}
-.pill{font-size:10px;font-weight:850;padding:7px 9px;border-radius:999px;border:1px solid #6e294d;background:#2a1020;color:#ffafd0}
-.subtitle{color:var(--muted);font-size:12px;margin-top:4px;line-height:1.45}
-.notice{margin-top:14px;border:1px solid #54213d;background:linear-gradient(90deg,rgba(208,0,111,.10),rgba(159,18,57,.07));border-radius:15px;padding:12px;color:#e6d4de;font-size:12px;line-height:1.5}
-.panel{margin-top:16px;border:1px solid var(--line);background:#140e16;border-radius:19px;padding:13px}.label{font-weight:900;font-size:14px;margin-bottom:8px}
-.searchrow{display:grid;grid-template-columns:1fr auto;gap:8px}.searchrow input{min-width:0;height:48px;border:1px solid var(--line);border-radius:14px;background:#0e0b10;color:#fff;padding:0 13px;outline:none;font-size:16px}.searchrow button{height:48px;border:0;border-radius:14px;padding:0 17px;color:#fff;font-weight:900;background:linear-gradient(100deg,var(--mag),var(--crimson))}
-.status{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px;margin:9px 2px 0}.results{margin-top:10px;border:1px solid var(--line);border-radius:15px;overflow:hidden;display:none}
-.result{display:flex;align-items:center;gap:10px;width:100%;padding:10px;border:0;border-bottom:1px solid #33202d;background:#171018;color:#fff;text-align:left}.result:last-child{border-bottom:0}.result img{width:34px;height:34px;object-fit:contain}.result small{display:block;color:var(--muted);margin-top:2px}
-.section{font-size:18px;font-weight:900;margin:20px 0 10px}.empty,.loading,.error{border:1px solid var(--line);background:#150e17;border-radius:17px;padding:15px;color:var(--muted);font-size:13px;line-height:1.5}.error{border-color:#71273b;color:#ffc4cf}
-.card{border:1px solid var(--line);background:linear-gradient(180deg,var(--panel2),var(--panel));border-radius:21px;padding:14px;box-shadow:0 14px 30px rgba(0,0,0,.18)}
-.top{display:flex;justify-content:space-between;gap:10px}.time{font-size:28px;font-weight:950;color:#ff91bd;font-variant-numeric:tabular-nums}.comp{text-align:right;font-size:10px;color:var(--muted);line-height:1.4}.match{font-size:18px;font-weight:900;margin:9px 0 12px}.vs{color:#c594aa}
-.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{background:#0d0a0f;border:1px solid #38222f;border-radius:14px;padding:10px;min-height:102px}.name{font-size:11px;color:#cdb8c5;line-height:1.15;min-height:27px}.row{display:flex;align-items:end;justify-content:space-between;gap:5px}.val{font-size:17px;font-weight:950;white-space:nowrap}.pct{font-size:25px;font-weight:950;color:#ff8fbd;font-variant-numeric:tabular-nums;white-space:nowrap}
-.metric-conf{display:flex;align-items:center;gap:5px;margin-top:8px;color:#cdb8c5;font-size:10px}.dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}.high{background:var(--green)}.medium{background:var(--yellow)}.low{background:var(--red)}
-.details{margin-top:12px;padding-top:12px;border-top:1px solid #3c2232;color:#d9c5d1;font-size:12px;line-height:1.6}.context{margin-top:10px;padding:10px;border:1px solid #38222f;border-radius:12px;background:#100b11}
-.legend{margin-top:16px;border:1px solid #3b2231;border-radius:15px;padding:12px;background:#100b11;color:#bfaeba;font-size:11px;line-height:1.55}
-.cooldown{margin-top:10px;color:#e9c8d7;font-size:11px}
-@media(min-width:800px){.wrap{max-width:900px}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+:root{--bg:#09070a;--panel:#151017;--panel2:#1d1119;--line:#3a2330;--muted:#b9a6b1;--mag:#bb1260;--crimson:#7f0b34;--green:#33d17a;--yellow:#f7c84a;--red:#ff5c72;--pink:#ff8fbd}
+*{box-sizing:border-box}html{background:var(--bg);color-scheme:dark}body{margin:0;background:radial-gradient(circle at 10% 0,#311020 0,transparent 33%),linear-gradient(#0b080b,#09070a 60%);color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;min-height:100vh}.wrap{width:min(100%,680px);margin:auto;padding:calc(22px + env(safe-area-inset-top)) 15px calc(32px + env(safe-area-inset-bottom))}.brand{display:flex;justify-content:space-between;align-items:center;gap:12px}.title{font-size:31px;font-weight:950;letter-spacing:-1.1px}.title span{color:var(--pink)}.pill{border:1px solid #603047;background:#1b0e15;border-radius:999px;padding:7px 10px;font-size:10px;font-weight:900;letter-spacing:.6px;color:#ffbbd7}.subtitle{margin-top:4px;color:var(--muted);font-size:11px}.notice{margin-top:16px;border:1px solid #492435;background:linear-gradient(180deg,#1b1017,#120d12);border-radius:15px;padding:12px;color:#e6d4de;font-size:12px;line-height:1.55}.panel{margin-top:16px;border:1px solid var(--line);background:#140e16;border-radius:19px;padding:13px}.label{font-weight:900;font-size:14px;margin-bottom:8px}.searchrow{display:grid;grid-template-columns:1fr auto;gap:8px}.searchrow input{min-width:0;height:49px;border:1px solid var(--line);border-radius:14px;background:#0e0b10;color:#fff;padding:0 13px;outline:none;font-size:16px}.searchrow button{height:49px;border:0;border-radius:14px;padding:0 17px;color:#fff;font-weight:900;background:linear-gradient(100deg,var(--mag),var(--crimson));cursor:pointer}.status{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px;margin:9px 2px 0}.results{margin-top:10px;border:1px solid var(--line);border-radius:15px;overflow:hidden;display:none}.result{display:flex;align-items:center;gap:10px;width:100%;padding:10px;border:0;border-bottom:1px solid #33202d;background:#171018;color:#fff;text-align:left;cursor:pointer}.result:last-child{border-bottom:0}.result img{width:36px;height:36px;object-fit:contain}.result small{display:block;color:var(--muted);margin-top:2px}.section{font-size:18px;font-weight:900;margin:20px 0 10px}.empty,.loading,.error{border:1px solid var(--line);background:#150e17;border-radius:17px;padding:15px;color:var(--muted);font-size:13px;line-height:1.55}.error{border-color:#71273b;color:#ffc4cf}.card{border:1px solid var(--line);background:linear-gradient(180deg,var(--panel2),var(--panel));border-radius:21px;padding:14px;box-shadow:0 14px 30px rgba(0,0,0,.18)}.top{display:flex;justify-content:space-between;gap:10px}.time{font-size:28px;font-weight:950;color:var(--pink);font-variant-numeric:tabular-nums}.date{font-size:11px;color:#d7bdca;margin-top:2px}.comp{text-align:right;font-size:10px;color:var(--muted);line-height:1.4;max-width:48%}.match{font-size:18px;font-weight:900;margin:10px 0 12px}.vs{color:#c594aa}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{background:#0d0a0f;border:1px solid #38222f;border-radius:14px;padding:10px;min-height:102px}.name{font-size:11px;color:#cdb8c5;line-height:1.15;min-height:27px}.row{display:flex;align-items:end;justify-content:space-between;gap:5px}.val{font-size:17px;font-weight:950;white-space:nowrap}.pct{font-size:25px;font-weight:950;color:var(--pink);font-variant-numeric:tabular-nums;white-space:nowrap}.metric-conf{display:flex;align-items:center;gap:5px;margin-top:8px;color:#cdb8c5;font-size:10px}.dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}.high{background:var(--green)}.medium{background:var(--yellow)}.low{background:var(--red)}.details{margin-top:12px;padding-top:12px;border-top:1px solid #3c2232;color:#d9c5d1;font-size:12px;line-height:1.65}.detail-title{font-weight:900;color:#fff;margin:10px 0 3px}.sources{margin-top:13px;padding-top:12px;border-top:1px solid #3c2232}.source{display:block;text-decoration:none;color:#ffd0e2;border:1px solid #3a2330;background:#100b11;border-radius:11px;padding:9px 10px;margin-top:7px;font-size:11px;line-height:1.4}.source small{display:block;color:#9f8b96;margin-bottom:2px}.warnings{margin-top:10px;padding:10px;border:1px solid #5d3d22;background:#1a120b;border-radius:11px;color:#f5d8aa;font-size:11px;line-height:1.5}.legend{margin-top:16px;border:1px solid #3b2231;border-radius:15px;padding:12px;background:#100b11;color:#bfaeba;font-size:11px;line-height:1.55}.cache{margin-top:9px;color:#d7bdca;font-size:11px}.webbadge{color:#7ee2ab}@media(min-width:800px){.wrap{max-width:900px}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style>
 </head>
 <body>
 <main class="wrap">
   <div class="brand">
     <div class="title">Radar <span>Fútbol</span></div>
-    <div class="pill" id="pill">MODO CONSULTA</div>
+    <div class="pill" id="pill">WEB DIRECTA</div>
   </div>
   <div class="subtitle">Hora de Chile · formato 24 h · prestigio histórico: 0%</div>
 
   <div class="notice">
-    <b>Optimizado para el plan gratuito:</b> al abrir la app se realizan <b>0 consultas deportivas</b>. Buscar un club usa 1 consulta y analizar el partido seleccionado usa hasta 6.
+    <b>Versión 4 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública.
   </div>
 
   <section class="panel">
     <div class="label">Buscar equipo</div>
     <form id="searchForm" class="searchrow">
-      <input id="search" placeholder="Ej.: Everton, Stoke City…" autocomplete="off">
+      <input id="search" placeholder="Ej.: River Plate, Everton, Liverpool…" autocomplete="off" autocapitalize="words">
       <button type="submit">Buscar</button>
     </form>
     <div class="status">
       <span id="status">Sin consultas</span>
-      <span id="health">Comprobando conexión…</span>
+      <span id="health">Comprobando…</span>
     </div>
     <div id="results" class="results"></div>
   </section>
 
   <h2 class="section">Análisis del próximo encuentro</h2>
   <div id="content" class="empty">
-    Escribe un club y pulsa <b>Buscar</b>. El análisis profundo comienza sólo al seleccionar el equipo correcto.
+    Escribe un club y pulsa <b>Buscar</b>. Después selecciona el equipo correcto. Radar Fútbol leerá páginas web públicas y calculará los seis mercados.
   </div>
 
   <div class="legend">
     <b>G</b> = Ganado · <b>E</b> = Empatado · <b>P</b> = Perdido.<br>
     +3,5 = 4 o más · −3,5 = 3 o menos.<br>
-    Confianza: 🟢 Alta · 🟡 Media · 🔴 Baja.
+    Confianza: 🟢 Alta · 🟡 Media · 🔴 Baja.<br>
+    Las probabilidades son estimaciones estadísticas, no garantías.
   </div>
 </main>
-
 <script>
 const $=id=>document.getElementById(id);
 const confClass=c=>c==="Alta"?"high":c==="Media"?"medium":"low";
+const esc=s=>String(s??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 
 function metric(name,obj){
   return `<div class="metric">
-    <div class="name">${name}</div>
-    <div class="row">
-      <div class="val">${obj?.seleccion??"—"}</div>
-      <div class="pct">${Math.round(obj?.probabilidad??0)}%</div>
-    </div>
-    <div class="metric-conf"><span class="dot ${confClass(obj?.confianza)}"></span>${obj?.confianza??"Baja"}</div>
+    <div class="name">${esc(name)}</div>
+    <div class="row"><div class="val">${esc(obj?.seleccion??"—")}</div><div class="pct">${Math.round(obj?.probabilidad??0)}%</div></div>
+    <div class="metric-conf"><span class="dot ${confClass(obj?.confianza)}"></span>${esc(obj?.confianza??"Baja")}</div>
   </div>`;
 }
+function form(s){return s?esc(s.split("").join(" · ")):"—"}
+function listNames(arr){return arr?.length?arr.map(esc).join(", "):"No detalladas"}
 
 async function health(){
   try{
     const r=await fetch("/api/health",{cache:"no-store"});
     const d=await r.json();
-    $("health").textContent=d.datos_deportivos?"API deportiva conectada":"Falta clave deportiva";
-    $("pill").textContent=d.datos_deportivos?"MODO CONSULTA":"CONFIGURAR API";
+    if(d.ok && d.modo==="web-directa"){
+      $("health").innerHTML='<span class="webbadge">Web directa activa</span>';
+      $("pill").textContent="WEB DIRECTA";
+    }else throw new Error();
   }catch{
     $("health").textContent="Backend sin conexión";
     $("pill").textContent="SIN CONEXIÓN";
@@ -102,12 +82,15 @@ async function health(){
 }
 
 function render(p){
+  const sources=(p.fuentes||[]).map(s=>`<a class="source" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><small>${esc(s.tipo)}</small>${esc(s.titulo)}</a>`).join("");
+  const warnings=(p.advertencias||[]).length?`<div class="warnings">${p.advertencias.map(x=>`• ${esc(x)}`).join("<br>")}</div>`:"";
+  const odds=p.cuotas_1x2?.length===3?`${p.cuotas_1x2.map(x=>Number(x).toFixed(2)).join(" · ")}`:"No disponibles";
   $("content").innerHTML=`<article class="card">
     <div class="top">
-      <div class="time">${p.hora_chile}</div>
-      <div class="comp">${p.competicion}<br>${p.pais}<br>Hora Chile</div>
+      <div><div class="time">${esc(p.hora_chile)}</div><div class="date">${esc(p.fecha_chile)} · hora Chile</div></div>
+      <div class="comp">${esc(p.competicion)}<br>Actualizado ${esc(p.actualizado_chile)}</div>
     </div>
-    <div class="match">${p.local} <span class="vs">vs</span> ${p.visita}</div>
+    <div class="match">${esc(p.local)} <span class="vs">vs</span> ${esc(p.visita)}</div>
     <div class="metrics">
       ${metric("Ganador",p.ganador)}
       ${metric("Doble Oportunidad",p.doble_oportunidad)}
@@ -117,86 +100,73 @@ function render(p){
       ${metric("Goles Totales",p.goles_totales)}
     </div>
     <div class="details">
-      Tabla: ${p.local} ${p.tabla_local??"—"}º · ${p.visita} ${p.tabla_visita??"—"}º<br>
-      Forma ${p.local}: ${p.forma_local?p.forma_local.split("").join(" · "):"—"}<br>
-      Forma ${p.visita}: ${p.forma_visita?p.forma_visita.split("").join(" · "):"—"}<br>
-      Árbitro: ${p.arbitro??"No informado"}<br>
-      Bajas registradas: ${p.local} ${p.bajas_local??0} · ${p.visita} ${p.bajas_visita??0}<br>
-      Calidad de datos: ${p.calidad_datos}%<br>
-      Actualizado: ${p.actualizado_chile} · hora Chile<br>
-      Consultas API-Sports utilizadas: ${p.consultas_api_sports??0}
-      ${p.contexto?`<div class="context">${p.contexto}</div>`:""}
-      ${p.cache?'<div class="cooldown">Resultado recuperado desde caché; no consumió nuevas consultas API-Sports.</div>':''}
+      <div class="detail-title">Forma y tabla</div>
+      Últimos 5 — ${esc(p.local)}: ${form(p.forma_local_5)}<br>
+      Últimos 5 — ${esc(p.visita)}: ${form(p.forma_visita_5)}<br>
+      Últimos 10 — ${esc(p.local)}: ${form(p.forma_local_10)}<br>
+      Últimos 10 — ${esc(p.visita)}: ${form(p.forma_visita_10)}<br>
+      Tabla: ${esc(p.local)} ${p.tabla_local?esc(p.tabla_local)+"º":"—"} · ${esc(p.visita)} ${p.tabla_visita?esc(p.tabla_visita)+"º":"—"}<br>
+
+      <div class="detail-title">Bajas y arbitraje</div>
+      Bajas ${esc(p.local)}: ${p.bajas_local??"No confirmadas"}${p.bajas_local_nombres?.length?` · ${listNames(p.bajas_local_nombres)}`:""}<br>
+      Bajas ${esc(p.visita)}: ${p.bajas_visita??"No confirmadas"}${p.bajas_visita_nombres?.length?` · ${listNames(p.bajas_visita_nombres)}`:""}<br>
+      Árbitro: ${esc(p.arbitro??"No confirmado")}<br>
+      VAR: ${esc(p.var??"No confirmado")}<br>
+      Cuotas 1/X/2 encontradas: ${esc(odds)}<br>
+      Calidad de datos: <b>${esc(p.calidad_datos)}%</b><br>
+      Prestigio histórico en el modelo: <b>0%</b>
+      ${p.cache?'<div class="cache">Este análisis salió de caché para evitar repetir descargas web.</div>':''}
+      ${warnings}
+      <div class="sources"><div class="detail-title">Fuentes consultadas</div>${sources||"No se pudieron mostrar enlaces de fuentes."}</div>
     </div>
   </article>`;
+}
+
+async function analyze(id,name){
+  $("results").style.display="none";
+  $("search").value=name;
+  $("content").innerHTML='<div class="loading">Leyendo fuentes web y calculando el próximo encuentro… Puede tardar algunos segundos.</div>';
+  $("status").textContent="Analizando…";
+  try{
+    const r=await fetch(`/api/team/${encodeURIComponent(id)}/next?name=${encodeURIComponent(name)}&_=${Date.now()}`,{cache:"no-store"});
+    const body=await r.text();
+    let d={}; try{d=JSON.parse(body)}catch{}
+    if(!r.ok)throw new Error(d.detail||"No se pudo completar el análisis.");
+    render(d);
+    $("status").textContent=d.cache?"Análisis en caché":"Análisis web completado";
+  }catch(err){
+    $("content").innerHTML=`<div class="error">${esc(err.message||"No se pudo completar el análisis.")}</div>`;
+    $("status").textContent="Error de análisis";
+  }
 }
 
 $("searchForm").addEventListener("submit",async e=>{
   e.preventDefault();
   const q=$("search").value.trim();
   if(q.length<2)return;
-
-  $("status").textContent="Buscando…";
+  $("status").textContent="Buscando en la web…";
   $("results").style.display="none";
-
   try{
     const r=await fetch("/api/search?q="+encodeURIComponent(q),{cache:"no-store"});
-    if(!r.ok)throw new Error(await r.text());
-    const d=await r.json();
-
-    $("status").textContent=d.cache?"Búsqueda en caché · 0 consultas":"Búsqueda realizada · 1 consulta";
-
-    if(!d.response?.length){
-      $("results").innerHTML='<div class="empty">No se encontraron equipos.</div>';
-      $("results").style.display="block";
-      return;
-    }
-
-    $("results").innerHTML=d.response.map(t=>`
-      <button class="result" type="button" data-id="${t.id}">
-        ${t.logo?`<img src="${t.logo}" alt="">`:""}
-        <span><b>${t.nombre}</b><small>${t.pais||""}${t.ciudad?" · "+t.ciudad:""}</small></span>
-      </button>`).join("");
-
+    const body=await r.text();
+    let d={}; try{d=JSON.parse(body)}catch{}
+    if(!r.ok)throw new Error(d.detail||"No se pudo buscar el club.");
+    if(!d.response?.length)throw new Error("No se encontraron equipos.");
+    $("results").innerHTML=d.response.map(t=>`<button class="result" type="button" data-id="${esc(t.id)}" data-name="${esc(t.nombre)}">
+      ${t.logo?`<img src="${esc(t.logo)}" alt="" onerror="this.style.visibility='hidden'">`:""}
+      <span><b>${esc(t.nombre)}</b><small>${esc(t.pais||"Fuente web")}</small></span>
+    </button>`).join("");
     $("results").style.display="block";
-
-    document.querySelectorAll(".result").forEach(btn=>{
-      btn.addEventListener("click",async()=>{
-        $("results").style.display="none";
-        $("search").value=btn.querySelector("b").textContent;
-        $("content").innerHTML='<div class="loading">Analizando en profundidad el próximo encuentro seleccionado…</div>';
-        $("status").textContent="Analizando partido…";
-
-        try{
-          const rr=await fetch(`/api/team/${btn.dataset.id}/next?_=${Date.now()}`,{cache:"no-store"});
-          if(!rr.ok)throw new Error(await rr.text());
-          const p=await rr.json();
-          render(p);
-
-          if(p.cache){
-            $("status").textContent=`Caché · actualizado ${p.actualizado_chile.slice(11,16)}`;
-          }else{
-            $("status").textContent=`Análisis completo · ${p.consultas_api_sports} consultas`;
-          }
-        }catch(err){
-          let message="No se pudo completar el análisis.";
-          try{
-            const raw=String(err.message||"");
-            const parsed=JSON.parse(raw);
-            if(parsed.detail)message=parsed.detail;
-          }catch(_){}
-          $("content").innerHTML=`<div class="error">${message}</div>`;
-          $("status").textContent="Error de consulta";
-        }
-      });
-    });
+    $("status").textContent="Selecciona el equipo correcto";
+    document.querySelectorAll(".result").forEach(btn=>btn.addEventListener("click",()=>analyze(btn.dataset.id,btn.dataset.name)));
   }catch(err){
-    $("content").innerHTML='<div class="error">No fue posible buscar el club. Revisa que API-Sports esté activo y que la cuota diaria no esté suspendida.</div>';
-    $("status").textContent="Error de consulta";
+    $("content").innerHTML=`<div class="error">${esc(err.message||"No se pudo buscar el club.")}<br><br>Prueba con el nombre completo, por ejemplo: <b>River Plate</b>.</div>`;
+    $("status").textContent="Error de búsqueda";
   }
 });
 
 health();
+if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("/sw.js").catch(()=>{}));}
 </script>
 </body>
 </html>
