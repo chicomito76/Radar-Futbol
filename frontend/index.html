@@ -24,7 +24,7 @@
   <div class="subtitle">Hora de Chile · formato 24 h · prestigio histórico: 0%</div>
 
   <div class="notice">
-    <b>Versión 4.1 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública.
+    <b>Versión 4.2 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública.
   </div>
 
   <section class="panel">
@@ -71,7 +71,7 @@ async function health(){
   try{
     const r=await fetch("/api/health",{cache:"no-store"});
     const d=await r.json();
-    if(d.ok && d.modo==="web-directa"){
+    if(d.ok && String(d.modo||"").startsWith("web-directa")){
       $("health").innerHTML='<span class="webbadge">Web directa activa</span>';
       $("pill").textContent="WEB DIRECTA";
     }else throw new Error();
