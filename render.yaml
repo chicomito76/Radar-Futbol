@@ -2,15 +2,5 @@ services:
   - type: web
     name: radar-futbol
     runtime: docker
-    plan: starter
     autoDeploy: true
     healthCheckPath: /api/health
-    envVars:
-      - key: API_SPORTS_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: OPENAI_MODEL
-        value: gpt-5.6
-      - key: MAX_FIXTURES_ANALYZE
-        value: "30"
