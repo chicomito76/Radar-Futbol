@@ -24,7 +24,7 @@
   <div class="subtitle">Hora de Chile · formato 24 h · prestigio histórico: 0%</div>
 
   <div class="notice">
-    <b>Versión 4.4 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública. La confianza se limita automáticamente cuando faltan datos críticos. En torneos internacionales, las posiciones de ligas nacionales distintas tienen peso reducido.
+    <b>Versión 4.5 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública. La confianza se limita automáticamente cuando faltan datos críticos. En torneos internacionales, las posiciones de ligas nacionales distintas tienen peso reducido. Si faltan árbitro/VAR o bajas, el análisis se entrega igual con confiabilidad reducida.
   </div>
 
   <section class="panel">
@@ -102,6 +102,10 @@ function render(p){
       ${metric("Tarjetas Rojas",p.tarjetas_rojas)}
       ${metric("Goles Totales",p.goles_totales)}
     </div>
+    <div class="reliability">
+      Confiabilidad del análisis: <b>${esc(p.confiabilidad_analisis??p.calidad_datos)}%</b> · ${esc(p.nivel_confiabilidad_analisis??"—")}
+      ${p.analisis_parcial?`<div class="partial">Análisis parcial: faltan ${esc((p.datos_criticos_faltantes||[]).join(", "))}.</div>`:""}
+    </div>
     <div class="details">
       <div class="detail-title">Forma y tabla</div>
       Últimos 5 — ${esc(p.local)}: ${form(p.forma_local_5)}<br>
@@ -117,7 +121,7 @@ function render(p){
       ${p.arbitro_amarillas_pg!=null?`Promedio árbitro: ${Number(p.arbitro_amarillas_pg).toFixed(2)} amarillas/partido${p.arbitro_rojas_pg!=null?` · ${Number(p.arbitro_rojas_pg).toFixed(2)} rojas/partido`:""}<br>`:""}
       VAR: ${esc(p.var??"No confirmado")}<br>
       Cuotas 1/X/2 encontradas: ${esc(odds)}<br>
-      Calidad de datos: <b>${esc(p.calidad_datos)}%</b><br>
+      Cobertura de datos: <b>${esc(p.calidad_datos)}%</b><br>Confiabilidad ajustada: <b>${esc(p.confiabilidad_analisis??p.calidad_datos)}%</b><br>
       Prestigio histórico en el modelo: <b>0%</b>
       ${p.cache?'<div class="cache">Este análisis salió de caché para evitar repetir descargas web.</div>':''}
       ${warnings}
