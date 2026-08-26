@@ -24,7 +24,7 @@
   <div class="subtitle">Hora de Chile · formato 24 h · prestigio histórico: 0%</div>
 
   <div class="notice">
-    <b>Versión 4.5 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública. La confianza se limita automáticamente cuando faltan datos críticos. En torneos internacionales, las posiciones de ligas nacionales distintas tienen peso reducido. Si faltan árbitro/VAR o bajas, el análisis se entrega igual con confiabilidad reducida.
+    <b>Versión 4.6 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública. La confianza se limita automáticamente cuando faltan datos críticos. En torneos internacionales, las posiciones de ligas nacionales distintas tienen peso reducido. Si faltan bajas, el análisis se entrega con confiabilidad reducida. Si faltan árbitro o VAR, Tarjetas Amarillas y Tarjetas Rojas mantienen su porcentaje pero no muestran color de confianza.
   </div>
 
   <section class="panel">
@@ -48,7 +48,7 @@
   <div class="legend">
     <b>G</b> = Ganado · <b>E</b> = Empatado · <b>P</b> = Perdido.<br>
     +3,5 = 4 o más · −3,5 = 3 o menos.<br>
-    Confianza: 🟢 Alta · 🟡 Media · 🔴 Baja.<br>
+    Confianza: 🟢 Alta · 🟡 Media · 🔴 Baja. Si un mercado no muestra color, faltan datos críticos para calificar su confianza.<br>
     Las probabilidades son estimaciones estadísticas, no garantías.
   </div>
 </main>
@@ -58,12 +58,16 @@ const confClass=c=>c==="Alta"?"high":c==="Media"?"medium":"low";
 const esc=s=>String(s??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
 
 function metric(name,obj){
-  const limited=obj?.confianza_limitada && obj?.motivo_confianza
+  const show=obj?.mostrar_confianza!==false && !!obj?.confianza;
+  const limited=show && obj?.confianza_limitada && obj?.motivo_confianza
     ? `<div class="limited">Confianza limitada: ${esc(obj.motivo_confianza)}</div>`:"";
+  const confidence=show
+    ? `<div class="metric-conf"><span class="dot ${confClass(obj.confianza)}"></span>${esc(obj.confianza)}</div>`
+    : "";
   return `<div class="metric">
     <div class="name">${esc(name)}</div>
     <div class="row"><div class="val">${esc(obj?.seleccion??"—")}</div><div class="pct">${Math.round(obj?.probabilidad??0)}%</div></div>
-    <div class="metric-conf"><span class="dot ${confClass(obj?.confianza)}"></span>${esc(obj?.confianza??"Baja")}</div>
+    ${confidence}
     ${limited}
   </div>`;
 }
