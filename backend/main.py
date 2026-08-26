@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 APP_NAME = "Radar Fútbol"
-APP_VERSION = "4.1-web-directa-buscador"
+APP_VERSION = "4.2-web-directa"
 TZ = ZoneInfo("America/Santiago")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
@@ -653,13 +653,15 @@ async def get_next_fixture(team_id: int) -> dict[str, Any]:
         if not dt and "TBD" not in time_text.upper():
             dt = parse_fixture_date_text(date_text, time_text)
 
-        # Si tenemos página del partido, intentamos una hora absoluta antes de mostrarla.
+        match_competition = ""
+        # Si tenemos página del partido, intentamos una hora absoluta y la competición.
         if game_url:
             try:
                 match_raw = await fetch_html(game_url)
                 precise = parse_event_start_from_html(match_raw)
                 if precise:
                     dt = precise
+                match_competition = parse_competition_from_match_html(match_raw)
             except Exception:
                 pass
 
@@ -669,7 +671,11 @@ async def get_next_fixture(team_id: int) -> dict[str, Any]:
         # El primer enlace suele ser local y el segundo visita.
         home = teams[0]
         away = teams[1]
-        competition = competition_cell(row) or "Competición no identificada"
+        competition = (
+            sanitize_competition(match_competition, home["name"], away["name"])
+            or sanitize_competition(competition_cell(row), home["name"], away["name"])
+            or "Competición no identificada"
+        )
 
         fixtures.append(
             {
@@ -950,22 +956,91 @@ def is_official_domain(url: str) -> bool:
     host = (urlparse(url).netloc or "").lower()
     return any(h in host for h in OFFICIAL_DOMAIN_HINTS)
 
+COMPETITION_HINTS = [
+    ("CONMEBOL Sudamericana", [r"\bsudamericana\b", r"\bconmebol sudamericana\b"]),
+    ("CONMEBOL Libertadores", [r"\blibertadores\b", r"\bconmebol libertadores\b"]),
+    ("Liga Profesional Argentina", [r"\bliga profesional\b", r"\bprimera nacional\b", r"\bargentine primera\b"]),
+    ("Primera División de Chile", [r"\bprimera división de chile\b", r"\bchilean primera\b", r"\bliga de primera\b"]),
+    ("Copa Chile", [r"\bcopa chile\b"]),
+    ("Copa Argentina", [r"\bcopa argentina\b"]),
+    ("UEFA Champions League", [r"\bchampions league\b"]),
+    ("UEFA Europa League", [r"\beuropa league\b"]),
+    ("UEFA Conference League", [r"\bconference league\b"]),
+    ("LaLiga", [r"\blaliga\b", r"\bspanish laliga\b"]),
+    ("Premier League", [r"\bpremier league\b"]),
+    ("Serie A", [r"\bitalian serie a\b"]),
+    ("Bundesliga", [r"\bbundesliga\b"]),
+    ("Ligue 1", [r"\bligue 1\b"]),
+    ("Liga MX", [r"\bliga mx\b"]),
+    ("Brasileirão", [r"\bbrasileir[aã]o\b", r"\bbrazilian serie a\b"]),
+]
+
+def competition_from_text(value: str) -> str:
+    clean = re.sub(r"\s+", " ", value or "").strip()
+    low = clean.lower()
+    for canonical, patterns in COMPETITION_HINTS:
+        for pattern in patterns:
+            if re.search(pattern, low, re.I):
+                return canonical
+    return ""
+
+def parse_competition_from_match_html(raw: str) -> str:
+    # 1) JSON/metadatos comunes de ESPN.
+    candidates = []
+    patterns = [
+        r'"leagueName"\s*:\s*"([^"]{3,100})"',
+        r'"competitionName"\s*:\s*"([^"]{3,100})"',
+        r'"tournamentName"\s*:\s*"([^"]{3,100})"',
+        r'"league"\s*:\s*\{[^{}]{0,1200}?"name"\s*:\s*"([^"]{3,100})"',
+        r'"competition"\s*:\s*\{[^{}]{0,1200}?"name"\s*:\s*"([^"]{3,100})"',
+    ]
+    for p in patterns:
+        for m in re.finditer(p, raw, re.I | re.S):
+            candidates.append(html.unescape(m.group(1)))
+    for c in candidates:
+        found = competition_from_text(c)
+        if found:
+            return found
+
+    # 2) Fallback restringido a nombres reconocibles de competiciones.
+    text = BeautifulSoup(raw, "html.parser").get_text(" ", strip=True)[:250_000]
+    return competition_from_text(text)
+
+def sanitize_competition(value: str, home_name: str = "", away_name: str = "") -> str:
+    value = re.sub(r"\s+", " ", value or "").strip()
+    if not value:
+        return ""
+    nv = norm_text(value)
+    if nv in {norm_text(home_name), norm_text(away_name)}:
+        return ""
+    # No aceptar como competición un nombre de equipo incrustado.
+    if home_name and norm_text(home_name) == nv:
+        return ""
+    if away_name and norm_text(away_name) == nv:
+        return ""
+    recognized = competition_from_text(value)
+    return recognized or ""
+
 def competition_cell(row) -> str:
     table = row.find_parent("table")
-    if table:
-        headers = [text_of(th).strip().upper() for th in table.find_all("th")]
-        data = [text_of(td).strip() for td in row.find_all("td")]
-        for i, h in enumerate(headers):
-            if "COMPETITION" in h or "COMPETICIÓN" in h:
-                if i < len(data) and data[i]:
-                    return data[i]
     cells = [text_of(td).strip() for td in row.find_all("td")]
-    for c in reversed(cells):
-        if not c or re.search(r"^\d{1,2}:\d{2}\s*(?:AM|PM)$|^TBD$", c, re.I):
-            continue
-        if c.upper() in {"TV", "ESPN", "STAR+", "DISNEY+"}:
-            continue
-        return c
+
+    # Sólo usar una columna si el encabezado realmente está alineado con las celdas.
+    if table:
+        header_row = table.find("tr")
+        headers = [text_of(th).strip().upper() for th in header_row.find_all(["th", "td"])] if header_row else []
+        if headers and len(headers) == len(cells):
+            for i, h in enumerate(headers):
+                if "COMPETITION" in h or "COMPETICIÓN" in h:
+                    candidate = competition_from_text(cells[i])
+                    if candidate:
+                        return candidate
+
+    # Fallback seguro: buscar exclusivamente nombres conocidos de competición.
+    for c in cells:
+        candidate = competition_from_text(c)
+        if candidate:
+            return candidate
     return ""
 
 async def discover_match_context(home: str, away: str, competition: str, dt: datetime | None) -> dict[str, Any]:
@@ -1108,8 +1183,9 @@ async def health():
         "app": APP_NAME,
         "version": APP_VERSION,
         "hora_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
-        "modo": "web-directa-v4.1",
+        "modo": "web-directa",
         "buscador": "ESPN-web-publica",
+        "version_motor": "4.2",
         "api_deportiva": False,
         "openai_api": False,
         "requiere_claves": False,
