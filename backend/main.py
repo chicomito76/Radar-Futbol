@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 APP_NAME = "Radar Fútbol"
-APP_VERSION = "4.5-web-directa"
+APP_VERSION = "4.6-web-directa"
 TZ = ZoneInfo("America/Santiago")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
@@ -48,7 +48,7 @@ CONTEXT_TTL = 20 * 60
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Safari/537.36 "
-    "RadarFutbol/4.5"
+    "RadarFutbol/4.6"
 )
 HEADERS = {
     "User-Agent": USER_AGENT,
@@ -1174,9 +1174,10 @@ async def discover_referee_stats(referee: str | None) -> dict[str, Any]:
     results = [r for batch in batches for r in batch]
     seen = set()
 
-    # Primero intentar los snippets de búsqueda.
+    # Primero intentar los snippets de búsqueda, sólo desde fuentes permitidas.
     for r in results:
-        if r.url in seen:
+        r.url = clean_search_url(r.url)
+        if r.url in seen or not is_trusted_context_source(r.url):
             continue
         seen.add(r.url)
         y, rr = parse_referee_stats_from_text(f"{r.title} {r.snippet}")
@@ -1185,8 +1186,17 @@ async def discover_referee_stats(referee: str | None) -> dict[str, Any]:
             cache_set(key, out)
             return out
 
-    # Luego páginas públicas legibles.
-    for r in results[:8]:
+    # Luego páginas públicas legibles, siempre de dominios permitidos.
+    trusted_results = []
+    seen_trusted = set()
+    for r in results:
+        r.url = clean_search_url(r.url)
+        if r.url in seen_trusted or not is_trusted_context_source(r.url):
+            continue
+        seen_trusted.add(r.url)
+        trusted_results.append(r)
+
+    for r in trusted_results[:8]:
         try:
             raw = await fetch_html(r.url, CONTEXT_TTL)
             visible = text_of(BeautifulSoup(raw, "html.parser"))[:180_000]
@@ -1204,14 +1214,90 @@ async def discover_referee_stats(referee: str | None) -> dict[str, Any]:
 
 
 OFFICIAL_DOMAIN_HINTS = [
-    "conmebol.com", "uefa.com", "fifa.com", "anfp.cl", "afa.com.ar",
+    "conmebol.com", "gol.conmebol.com", "uefa.com", "fifa.com", "anfp.cl", "afa.com.ar",
     "premierleague.com", "laliga.com", "bundesliga.com", "legaseriea.it",
     "ligue1.com", "cbf.com.br", "auf.org.uy", "dimayor.com.co", "ligamx.net",
+    "fpf.org.pe", "fef.ec", "apf.org.py", "fpf.pt", "rfef.es", "thefa.com",
+    "fff.fr", "dfb.de", "figc.it", "knvb.nl", "rbfa.be", "concacaf.com",
 ]
 
-def is_official_domain(url: str) -> bool:
+SPORT_DATA_DOMAINS = [
+    "espn.com", "espn.com.ar", "espn.cl", "espn.com.co", "espn.com.mx",
+    "sofascore.com", "fotmob.com", "flashscore.com", "besoccer.com",
+    "es.besoccer.com", "transfermarkt.com", "transfermarkt.us",
+    "worldfootball.net", "soccerway.com", "footystats.org", "valuestats.com",
+    "footymetrics.com",
+]
+
+TRUSTED_NEWS_DOMAINS = [
+    # Argentina
+    "tycsports.com", "ole.com.ar", "clarin.com", "lanacion.com.ar",
+    "infobae.com", "pagina12.com.ar",
+    # Chile
+    "emol.com", "latercera.com", "biobiochile.cl", "cooperativa.cl",
+    "adnradio.cl", "t13.cl", "24horas.cl",
+    # Colombia
+    "eltiempo.com", "elespectador.com", "caracol.com.co", "futbolred.com",
+    "antena2.com", "wradio.com.co",
+    # Brasil
+    "ge.globo.com", "globo.com", "uol.com.br", "lance.com.br",
+    # Uruguay / Paraguay / Perú / Ecuador
+    "ovaciondigital.com.uy", "elpais.com.uy", "abc.com.py", "ultimahora.com",
+    "elcomercio.pe", "depor.com", "libero.pe", "eluniverso.com", "primicias.ec",
+    # México / USA latino
+    "mediotiempo.com", "record.com.mx", "eluniversal.com.mx", "tudn.com",
+    # España
+    "marca.com", "as.com", "mundodeportivo.com", "sport.es", "elpais.com",
+    # Inglaterra
+    "bbc.com", "theguardian.com", "skysports.com", "independent.co.uk",
+    # Italia / Alemania / Francia / Portugal
+    "gazzetta.it", "corrieredellosport.it", "tuttosport.com",
+    "kicker.de", "bild.de", "lequipe.fr", "rmcsport.bfmtv.com",
+    "abola.pt", "record.pt", "ojogo.pt",
+]
+
+BETTING_DOMAINS = [
+    "oddsportal.com", "oddschecker.com", "betexplorer.com", "sportingbet.com",
+    "stake.bet.ar", "caliente.mx", "sports.caliente.mx",
+]
+
+BLOCKED_SOURCE_DOMAINS = [
+    "reddit.com", "facebook.com", "instagram.com", "tiktok.com", "twitter.com",
+    "x.com", "youtube.com", "youtu.be", "xvideos.com", "pornhub.com",
+    "pinterest.com", "quora.com", "threads.net", "telegram.me", "t.me",
+]
+
+def _host_matches(host: str, domain: str) -> bool:
+    host = (host or "").lower().split(":")[0]
+    domain = domain.lower()
+    return host == domain or host.endswith("." + domain)
+
+def host_in_domains(url: str, domains: list[str]) -> bool:
     host = (urlparse(url).netloc or "").lower()
-    return any(h in host for h in OFFICIAL_DOMAIN_HINTS)
+    return any(_host_matches(host, d) for d in domains)
+
+def is_blocked_source(url: str) -> bool:
+    return host_in_domains(url, BLOCKED_SOURCE_DOMAINS)
+
+def is_official_domain(url: str) -> bool:
+    return host_in_domains(url, OFFICIAL_DOMAIN_HINTS)
+
+def source_trust_type(url: str) -> str | None:
+    if not url or is_blocked_source(url):
+        return None
+    if is_official_domain(url):
+        return "Oficial"
+    if host_in_domains(url, SPORT_DATA_DOMAINS):
+        return "Estadística deportiva"
+    if host_in_domains(url, TRUSTED_NEWS_DOMAINS):
+        return "Medio confiable"
+    if host_in_domains(url, BETTING_DOMAINS):
+        return "Mercado"
+    return None
+
+def is_trusted_context_source(url: str) -> bool:
+    kind = source_trust_type(url)
+    return kind in {"Oficial", "Estadística deportiva", "Medio confiable"}
 
 COMPETITION_HINTS = [
     ("CONMEBOL Sudamericana", [r"\bsudamericana\b", r"\bconmebol sudamericana\b"]),
@@ -1341,45 +1427,51 @@ async def discover_match_context(home: str, away: str, competition: str, dt: dat
         r.url = clean_search_url(r.url)
         if r.url in seen_clean:
             continue
+        if not is_trusted_context_source(r.url):
+            continue
         seen_clean.add(r.url)
         cleaned_results.append(r)
     merged = cleaned_results
 
-    merged.sort(key=lambda x: (0 if is_official_domain(x.url) else 1))
+    # Prioridad: oficial -> estadística deportiva -> prensa confiable.
+    priority = {"Oficial": 0, "Estadística deportiva": 1, "Medio confiable": 2}
+    merged.sort(key=lambda x: priority.get(source_trust_type(x.url) or "", 9))
     referee = var = None
     sources = []
 
-    # Snippets primero: suelen contener la ficha oficial sin necesitar otra descarga.
-    for r in merged[:12]:
+    # Snippets primero.
+    for r in merged[:15]:
         rr, vv = parse_referee_var_from_text(f"{r.title} {r.snippet}")
         if rr or vv:
             sources.append({
                 "titulo": r.title,
                 "url": r.url,
-                "tipo": "Oficial" if is_official_domain(r.url) else "Árbitro/VAR",
+                "tipo": source_trust_type(r.url) or "Fuente deportiva",
             })
-        referee = referee or rr
-        var = var or vv
+            referee = referee or rr
+            var = var or vv
         if referee and var:
             break
 
-    # Si falta algo, leer páginas públicas.
+    # Si falta algo, leer solamente páginas de fuentes autorizadas.
     if not (referee and var):
-        for r in merged[:10]:
-            if not any(s.get("url") == r.url for s in sources):
-                sources.append({
-                    "titulo": r.title,
-                    "url": r.url,
-                    "tipo": "Oficial" if is_official_domain(r.url) else "Árbitro/VAR",
-                })
+        for r in merged[:12]:
             try:
                 raw = await fetch_html(r.url, CONTEXT_TTL)
                 visible = text_of(BeautifulSoup(raw, "html.parser"))[:180_000]
                 rr, vv = parse_referee_var_from_text(visible)
-                referee = referee or rr
-                var = var or vv
             except Exception:
                 continue
+
+            if rr or vv:
+                if not any(s.get("url") == r.url for s in sources):
+                    sources.append({
+                        "titulo": r.title,
+                        "url": r.url,
+                        "tipo": source_trust_type(r.url) or "Fuente deportiva",
+                    })
+                referee = referee or rr
+                var = var or vv
             if referee and var:
                 break
 
@@ -1610,6 +1702,7 @@ def metric(
     quality: float,
     maximum_confidence: str = "Alta",
     reason: str | None = None,
+    show_confidence: bool = True,
 ) -> dict[str, Any]:
     computed = confidence(probability, quality)
     global_cap = global_confidence_cap(quality)
@@ -1617,15 +1710,23 @@ def metric(
     return {
         "seleccion": selection,
         "probabilidad": round(probability),
-        "confianza": final,
+        "confianza": final if show_confidence else None,
+        "mostrar_confianza": show_confidence,
         "confianza_calculada": computed,
-        "confianza_limitada": final != computed,
-        "motivo_confianza": reason if final != computed else None,
+        "confianza_limitada": show_confidence and final != computed,
+        "motivo_confianza": reason if show_confidence and final != computed else None,
     }
 
 
 def source_item(title: str, url: str | None, tipo: str) -> dict[str, str] | None:
     if not url:
+        return None
+    url = clean_search_url(url)
+    host = (urlparse(url).netloc or "").lower()
+    if not host or is_blocked_source(url):
+        return None
+    # Evitar mostrar links de buscadores como si fueran fuentes.
+    if _host_matches(host, "bing.com") or _host_matches(host, "duckduckgo.com"):
         return None
     return {"titulo": title, "url": url, "tipo": tipo}
 
@@ -1639,7 +1740,7 @@ async def health():
         "hora_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
         "modo": "web-directa",
         "buscador": "ESPN-web-publica",
-        "version_motor": "4.5",
+        "version_motor": "4.6",
         "api_deportiva": False,
         "openai_api": False,
         "requiere_claves": False,
@@ -1910,11 +2011,11 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
     if not odds.get("prob"):
         warnings.append("No se encontraron cuotas 1X2 públicas y estructuradas; Ganador y Doble Oportunidad no podrán tener confianza Alta.")
     if not context.get("referee"):
-        warnings.append("Árbitro todavía no confirmado; los mercados de tarjetas quedan limitados como máximo a confianza Media.")
+        warnings.append("Árbitro no confirmado; las probabilidades de tarjetas se muestran sin indicador de confianza.")
     elif referee_stats.get("yellow_pg") is None:
         warnings.append("Árbitro confirmado, pero sin una estadística de tarjetas por partido suficientemente clara; tarjetas quedan como máximo en confianza Media.")
     if not context.get("var"):
-        warnings.append("VAR no confirmado en una fuente web legible.")
+        warnings.append("VAR no confirmado; las probabilidades de tarjetas se muestran sin indicador de confianza.")
     if home_inj.get("count") is None or away_inj.get("count") is None:
         warnings.append("Alguna fuente de bajas no respondió o no entregó una lista actual legible; Ganador y Doble Oportunidad no podrán tener confianza Alta.")
 
@@ -1957,6 +2058,10 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
         reds_cap = "Media"
         cards_reason_parts.append("falta promedio de rojas del árbitro")
 
+    # La probabilidad de tarjetas se sigue mostrando, pero si falta Árbitro o VAR
+    # no se publica ningún color/nivel de confianza para esos mercados.
+    show_cards_confidence = bool(context.get("referee") and context.get("var"))
+
     result = {
         "modo": "web-directa",
         "local": home_name,
@@ -1968,8 +2073,8 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
         "ganador": metric(winner[0], winner[1], reliability, winner_cap, ", ".join(winner_reason_parts) or None),
         "doble_oportunidad": metric(double[0], double[1], reliability, winner_cap, ", ".join(winner_reason_parts) or None),
         "ambos_marcan": metric(btts_sel, btts_prob, reliability, goals_cap, goals_reason),
-        "tarjetas_amarillas": metric(yellow_sel, yellow_prob, reliability, cards_cap, ", ".join(cards_reason_parts) or None),
-        "tarjetas_rojas": metric(red_sel, red_prob, reliability, reds_cap, ", ".join(cards_reason_parts) or None),
+        "tarjetas_amarillas": metric(yellow_sel, yellow_prob, reliability, cards_cap, ", ".join(cards_reason_parts) or None, show_cards_confidence),
+        "tarjetas_rojas": metric(red_sel, red_prob, reliability, reds_cap, ", ".join(cards_reason_parts) or None, show_cards_confidence),
         "goles_totales": metric(goals_sel, goals_prob, reliability, goals_cap, goals_reason),
         "forma_local_5": h5["form"],
         "forma_visita_5": a5["form"],
