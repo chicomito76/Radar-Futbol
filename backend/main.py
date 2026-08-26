@@ -7,6 +7,7 @@ import math
 import os
 import re
 import socket
+import unicodedata
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
@@ -22,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 APP_NAME = "Radar Fútbol"
-APP_VERSION = "4.0-web-directa"
+APP_VERSION = "4.1-web-directa-buscador"
 TZ = ZoneInfo("America/Santiago")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
@@ -164,6 +165,34 @@ async def fetch_html(url: str, ttl: int = HTML_TTL) -> str:
         raise RuntimeError(f"No se pudo leer {urlparse(url).netloc}: {exc}") from exc
 
 
+async def fetch_json(url: str, ttl: int = HTML_TTL) -> dict[str, Any]:
+    """Lee JSON público que la propia web utiliza. No requiere clave ni suscripción."""
+    if not safe_external_url(url):
+        raise ValueError("URL externa no permitida")
+    key = f"json:{url}"
+    cached = cache_get(key, ttl)
+    if cached is not None:
+        return cached
+
+    try:
+        headers = dict(HEADERS)
+        headers["Accept"] = "application/json,text/plain,*/*"
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(18.0, connect=8.0),
+            headers=headers,
+            follow_redirects=True,
+        ) as client:
+            r = await client.get(url)
+        if r.status_code in {401, 403, 429}:
+            raise RuntimeError(f"Fuente no accesible ({r.status_code})")
+        r.raise_for_status()
+        data = r.json()
+        cache_set(key, data)
+        return data
+    except Exception as exc:
+        raise RuntimeError(f"No se pudo leer JSON de {urlparse(url).netloc}: {exc}") from exc
+
+
 @dataclass
 class SearchResult:
     title: str
@@ -181,6 +210,148 @@ def unwrap_ddg(url: str) -> str:
     except Exception:
         pass
     return url
+
+
+def norm_text(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value or "")
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = re.sub(r"[^a-zA-Z0-9]+", " ", value).lower()
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def slugify(value: str) -> str:
+    return norm_text(value).replace(" ", "-")
+
+
+def _first_link(item: dict[str, Any]) -> str | None:
+    links = item.get("links")
+    if isinstance(links, list):
+        for link in links:
+            if isinstance(link, dict) and isinstance(link.get("href"), str):
+                href = link["href"]
+                if "/soccer/" in href and "/team" in href:
+                    return href
+    for key in ("link", "href", "url"):
+        val = item.get(key)
+        if isinstance(val, str) and val.startswith("http"):
+            return val
+        if isinstance(val, dict) and isinstance(val.get("href"), str):
+            return val["href"]
+    return None
+
+
+def _walk_dicts(obj: Any):
+    if isinstance(obj, dict):
+        yield obj
+        for value in obj.values():
+            yield from _walk_dicts(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _walk_dicts(value)
+
+
+def _team_from_search_item(item: dict[str, Any], query: str) -> dict[str, Any] | None:
+    raw_id = item.get("id")
+    uid = str(item.get("uid") or "")
+    item_type = str(item.get("type") or "").lower()
+    sport = str(item.get("sport") or item.get("sportSlug") or "").lower()
+
+    # En fútbol ESPN usa uid s:600~t:ID. Aceptamos además type=team + sport=soccer.
+    looks_team = item_type in {"team", "club"} or "~t:" in uid
+    looks_soccer = sport in {"soccer", "football"} or uid.startswith("s:600") or "/soccer/" in str(item)
+    if not (looks_team and looks_soccer):
+        return None
+    try:
+        team_id = int(str(raw_id))
+    except Exception:
+        m = re.search(r"~t:(\d+)", uid)
+        if not m:
+            return None
+        team_id = int(m.group(1))
+
+    name = str(
+        item.get("displayName")
+        or item.get("name")
+        or item.get("shortDisplayName")
+        or item.get("shortName")
+        or ""
+    ).strip()
+    if not name:
+        return None
+
+    nq = norm_text(query)
+    nn = norm_text(name)
+    q_tokens = set(nq.split())
+    n_tokens = set(nn.split())
+    if nq and nq not in nn and not q_tokens.intersection(n_tokens):
+        return None
+
+    href = _first_link(item) or f"https://www.espn.com/soccer/team/_/id/{team_id}/{slugify(name)}"
+    league = str(item.get("league") or item.get("defaultLeagueSlug") or item.get("leagueSlug") or "").strip()
+    return {
+        "id": team_id,
+        "nombre": name,
+        "pais": league or "ESPN fútbol",
+        "logo": f"https://a.espncdn.com/i/teamlogos/soccer/500/{team_id}.png",
+        "fuente": href,
+    }
+
+
+async def search_espn_public_json(query: str) -> list[dict[str, Any]]:
+    """Buscador principal: datos públicos cargados por la propia web de ESPN."""
+    urls = [
+        f"https://site.web.api.espn.com/apis/common/v3/search?region=us&lang=en&query={quote(query)}&limit=30&mode=prefix",
+        f"https://site.web.api.espn.com/apis/search/v2?query={quote(query)}&limit=30",
+    ]
+    payloads = await asyncio.gather(*(fetch_json(u, SEARCH_TTL) for u in urls), return_exceptions=True)
+    found: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for payload in payloads:
+        if not isinstance(payload, (dict, list)):
+            continue
+        for item in _walk_dicts(payload):
+            candidate = _team_from_search_item(item, query)
+            if not candidate or candidate["id"] in seen:
+                continue
+            seen.add(candidate["id"])
+            found.append(candidate)
+
+    nq = norm_text(query)
+    def score(c: dict[str, Any]) -> tuple[int, int]:
+        nn = norm_text(c["nombre"])
+        if nn == nq:
+            return (0, len(nn))
+        if nn.startswith(nq):
+            return (1, len(nn))
+        if nq in nn:
+            return (2, len(nn))
+        return (3, len(nn))
+    found.sort(key=score)
+    return found[:12]
+
+
+# Respaldo mínimo para clubes probados. Sólo se usa si el buscador público no responde.
+KNOWN_TEAMS = {
+    "river plate": {"id": 16, "nombre": "River Plate"},
+    "colo colo": {"id": 2688, "nombre": "Colo Colo"},
+    "union espanola": {"id": 4132, "nombre": "Unión Española"},
+}
+
+def known_team_candidates(query: str) -> list[dict[str, Any]]:
+    nq = norm_text(query)
+    out = []
+    for key, item in KNOWN_TEAMS.items():
+        if nq == key or nq in key or key in nq:
+            tid = item["id"]
+            name = item["nombre"]
+            out.append({
+                "id": tid,
+                "nombre": name,
+                "pais": "Respaldo local",
+                "logo": f"https://a.espncdn.com/i/teamlogos/soccer/500/{tid}.png",
+                "fuente": f"https://www.espn.com/soccer/team/_/id/{tid}/{slugify(name)}",
+            })
+    return out
 
 
 async def search_espn_direct(query: str) -> list[SearchResult]:
@@ -301,24 +472,37 @@ def candidate_from_url(title: str, url: str) -> dict[str, Any] | None:
 
 
 async def discover_teams(query: str) -> list[dict[str, Any]]:
-    key = f"teams:{query.lower().strip()}"
+    key = f"teams:{norm_text(query)}"
     cached = cache_get(key, SEARCH_TTL)
     if cached is not None:
         return cached
 
+    # 1) Respaldo local inmediato para clubes ya verificados.
+    known = known_team_candidates(query)
+    if known:
+        cache_set(key, known)
+        return known
+
+    # 2) Buscador público que utiliza la propia web de ESPN (sin clave ni pago).
+    public = await search_espn_public_json(query)
+    if public:
+        cache_set(key, public)
+        return public
+
+    # 3) Último respaldo: páginas HTML / motores de búsqueda públicos.
     direct = await search_espn_direct(query)
     search_query = f'site:espn.com/soccer/team/_/id "{query}" fútbol'
     web = await web_search(search_query, 12)
     web_es = await web_search(f'site:espndeportes.espn.com/futbol/equipo/_/id "{query}"', 8)
 
-    query_tokens = {t for t in re.findall(r"[a-záéíóúñ0-9]+", query.lower()) if len(t) > 1}
+    query_tokens = {t for t in norm_text(query).split() if len(t) > 1}
     candidates: list[dict[str, Any]] = []
     seen: set[int] = set()
     for r in direct + web + web_es:
         c = candidate_from_url(r.title, r.url)
         if not c or c["id"] in seen:
             continue
-        name_tokens = set(re.findall(r"[a-záéíóúñ0-9]+", c["nombre"].lower()))
+        name_tokens = set(norm_text(c["nombre"]).split())
         if query_tokens and not (query_tokens & name_tokens):
             continue
         seen.add(c["id"])
@@ -924,7 +1108,8 @@ async def health():
         "app": APP_NAME,
         "version": APP_VERSION,
         "hora_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
-        "modo": "web-directa",
+        "modo": "web-directa-v4.1",
+        "buscador": "ESPN-web-publica",
         "api_deportiva": False,
         "openai_api": False,
         "requiere_claves": False,
@@ -937,7 +1122,7 @@ async def search(q: str = Query(min_length=2, max_length=80)):
     if not teams:
         raise HTTPException(
             status_code=502,
-            detail="No pude localizar el club en las fuentes web en este momento. Prueba con el nombre completo del equipo.",
+            detail="No pude localizar el club. El buscador web público no respondió; inténtalo nuevamente en unos segundos.",
         )
     return {"response": teams, "modo": "web-directa"}
 
