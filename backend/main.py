@@ -1,36 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import math
 import os
 import re
+import socket
 import time
-from datetime import datetime
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
+from bs4 import BeautifulSoup
+from dateutil import parser as dateparser
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
-
 APP_NAME = "Radar Fútbol"
-API_BASE = "https://v3.football.api-sports.io"
-API_SPORTS_KEY = os.getenv("API_SPORTS_KEY", "").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6").strip()
-
+APP_VERSION = "4.0-web-directa"
 TZ = ZoneInfo("America/Santiago")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
 
-app = FastAPI(title=APP_NAME, version="3.1-optimizada-6-consultas")
+app = FastAPI(title=APP_NAME, version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,17 +36,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# CACHÉ EN MEMORIA
-# - búsqueda de clubes: 15 minutos
-# - análisis de un equipo/partido: 10 minutos
+# Caché en memoria. Evita descargar la misma página varias veces.
 CACHE: dict[str, tuple[float, Any]] = {}
-SEARCH_TTL = 15 * 60
-ANALYSIS_TTL = 10 * 60
-ANALYSIS_COOLDOWN = 65
-LAST_ANALYSIS_AT = 0.0
-LAST_ANALYSIS_TEAM = None
+HTML_TTL = 15 * 60
+SEARCH_TTL = 30 * 60
+ANALYSIS_TTL = 12 * 60
+CONTEXT_TTL = 20 * 60
 
-def cache_read(key: str, ttl: int):
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Safari/537.36 "
+    "RadarFutbol/4.0"
+)
+HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept-Language": "es-CL,es;q=0.9,en;q=0.7",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+
+def now_chile() -> datetime:
+    return datetime.now(TZ)
+
+
+def cache_get(key: str, ttl: int):
     item = CACHE.get(key)
     if not item:
         return None
@@ -59,473 +69,1101 @@ def cache_read(key: str, ttl: int):
         return None
     return value
 
-def cache_write(key: str, value: Any):
+
+def cache_set(key: str, value: Any):
     CACHE[key] = (time.time(), value)
 
-def now_chile() -> datetime:
-    return datetime.now(tz=TZ)
-
-def to_chile(dt_str: str) -> tuple[str, str]:
-    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")).astimezone(TZ)
-    return dt.isoformat(), dt.strftime("%H:%M")
-
-async def api_get(path: str, params: dict[str, Any]) -> dict[str, Any]:
-    if not API_SPORTS_KEY:
-        raise HTTPException(status_code=503, detail="Falta API_SPORTS_KEY.")
-
-    headers = {"x-apisports-key": API_SPORTS_KEY}
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.get(f"{API_BASE}/{path}", params=params, headers=headers)
-
-    try:
-        data = response.json()
-    except Exception:
-        raise HTTPException(status_code=502, detail="La API deportiva devolvió una respuesta inválida.")
-
-    if response.status_code >= 400 or data.get("errors"):
-        raise HTTPException(
-            status_code=502,
-            detail=f"API deportiva: {data.get('errors') or response.status_code}"
-        )
-    return data
-
-def pct(value: Any, default: float) -> float:
-    try:
-        return float(str(value).replace("%", "").replace(",", "."))
-    except Exception:
-        return default
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
+
 def normalize3(a: float, b: float, c: float) -> tuple[float, float, float]:
     total = a + b + c
     if total <= 0:
-        return (33.34, 33.33, 33.33)
-    return (a / total * 100, b / total * 100, c / total * 100)
+        return 33.34, 33.33, 33.33
+    return a / total * 100, b / total * 100, c / total * 100
+
 
 def poisson_cdf(k: int, lam: float) -> float:
     lam = max(0.01, lam)
-    return sum(math.exp(-lam) * (lam ** i) / math.factorial(i) for i in range(k + 1))
+    return sum(math.exp(-lam) * (lam**i) / math.factorial(i) for i in range(k + 1))
+
 
 def best_line(lam: float, lines: list[float]) -> tuple[str, int]:
-    options = []
+    choices: list[tuple[str, float, float]] = []
     for line in lines:
-        options.append(("+", line, 1 - poisson_cdf(math.floor(line), lam)))
-        options.append(("-", line, poisson_cdf(math.floor(line), lam)))
-    sign, line, probability = max(options, key=lambda item: item[2])
-    return f"{sign}{str(line).replace('.', ',')}", round(probability * 100)
+        choices.append(("+", line, 1 - poisson_cdf(math.floor(line), lam)))
+        choices.append(("−", line, poisson_cdf(math.floor(line), lam)))
+    sign, line, prob = max(choices, key=lambda x: x[2])
+    return f"{sign}{str(line).replace('.', ',')}", round(prob * 100)
+
 
 def confidence(probability: float, quality: float) -> str:
-    score = 0.55 * quality + 0.45 * abs(probability - 50) * 2
-    if score >= 75:
+    score = 0.60 * quality + 0.40 * abs(probability - 50) * 2
+    if score >= 76:
         return "Alta"
-    if score >= 55:
+    if score >= 56:
         return "Media"
     return "Baja"
 
-def form_spanish(raw: str) -> str:
-    return (raw or "").upper().replace("W", "G").replace("D", "E").replace("L", "P")
 
-def team_stats(raw: dict[str, Any]) -> dict[str, float | str]:
-    response = (raw or {}).get("response") or {}
-    fixtures = response.get("fixtures") or {}
-
-    played = float((fixtures.get("played") or {}).get("total") or 0)
-    wins = float((fixtures.get("wins") or {}).get("total") or 0)
-    draws = float((fixtures.get("draws") or {}).get("total") or 0)
-
-    ppg = (3 * wins + draws) / played if played else 1.0
-
-    def number(value, default):
+def safe_external_url(url: str) -> bool:
+    """Bloquea destinos locales/privados. No intenta saltar logins, CAPTCHA ni bloqueos."""
+    try:
+        p = urlparse(url)
+        if p.scheme not in {"http", "https"} or not p.hostname:
+            return False
+        host = p.hostname.lower()
+        if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+            return False
         try:
-            return float(value)
+            ip = socket.gethostbyname(host)
+            octets = [int(x) for x in ip.split(".")]
+            if octets[0] in {10, 127}:
+                return False
+            if octets[0] == 192 and octets[1] == 168:
+                return False
+            if octets[0] == 172 and 16 <= octets[1] <= 31:
+                return False
+            if octets[0] == 169 and octets[1] == 254:
+                return False
         except Exception:
-            return default
+            # DNS puede variar; httpx hará la resolución final.
+            pass
+        return True
+    except Exception:
+        return False
 
-    gf = number((((response.get("goals") or {}).get("for") or {}).get("average") or {}).get("total"), 1.2)
-    ga = number((((response.get("goals") or {}).get("against") or {}).get("average") or {}).get("total"), 1.2)
 
-    form = form_spanish(response.get("form") or "")
-    n = max(1, len(form))
-    form_score = (3 * form.count("G") + form.count("E")) / n if form else ppg
+async def fetch_html(url: str, ttl: int = HTML_TTL) -> str:
+    if not safe_external_url(url):
+        raise ValueError("URL externa no permitida")
+    key = f"html:{url}"
+    cached = cache_get(key, ttl)
+    if cached is not None:
+        return cached
 
-    cards = response.get("cards") or {}
-    yellow_total = sum(
-        float(v.get("total") or 0)
-        for v in (cards.get("yellow") or {}).values()
-        if isinstance(v, dict)
-    )
-    red_total = sum(
-        float(v.get("total") or 0)
-        for v in (cards.get("red") or {}).values()
-        if isinstance(v, dict)
-    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(18.0, connect=8.0),
+            headers=HEADERS,
+            follow_redirects=True,
+        ) as client:
+            r = await client.get(url)
+        if r.status_code in {401, 403, 429}:
+            raise RuntimeError(f"Fuente no accesible ({r.status_code})")
+        r.raise_for_status()
+        content_type = (r.headers.get("content-type") or "").lower()
+        if "text/html" not in content_type and "application/xhtml" not in content_type:
+            raise RuntimeError("La fuente no devolvió HTML")
+        text = r.text[:2_500_000]
+        cache_set(key, text)
+        return text
+    except Exception as exc:
+        raise RuntimeError(f"No se pudo leer {urlparse(url).netloc}: {exc}") from exc
 
+
+@dataclass
+class SearchResult:
+    title: str
+    url: str
+    snippet: str = ""
+    engine: str = ""
+
+
+def unwrap_ddg(url: str) -> str:
+    try:
+        p = urlparse(url)
+        qs = parse_qs(p.query)
+        if "uddg" in qs:
+            return unquote(qs["uddg"][0])
+    except Exception:
+        pass
+    return url
+
+
+async def search_espn_direct(query: str) -> list[SearchResult]:
+    url = f"https://www.espn.com/search/_/q/{quote(query)}"
+    try:
+        raw = await fetch_html(url, SEARCH_TTL)
+    except Exception:
+        return []
+    soup = BeautifulSoup(raw, "html.parser")
+    out: list[SearchResult] = []
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if re.search(r"/(?:soccer/team|futbol/equipo)/_/id/\d+", href):
+            if href.startswith("/"):
+                href = "https://www.espn.com" + href
+            title = " ".join(a.stripped_strings).strip()
+            if title:
+                out.append(SearchResult(title=title, url=href, engine="ESPN"))
+    return out[:15]
+
+
+async def search_ddg(query: str) -> list[SearchResult]:
+    url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
+    try:
+        raw = await fetch_html(url, SEARCH_TTL)
+    except Exception:
+        return []
+    soup = BeautifulSoup(raw, "html.parser")
+    out: list[SearchResult] = []
+    for node in soup.select(".result"):
+        a = node.select_one("a.result__a") or node.find("a", href=True)
+        if not a:
+            continue
+        href = unwrap_ddg(a.get("href", ""))
+        if not href.startswith("http"):
+            continue
+        sn = node.select_one(".result__snippet")
+        out.append(
+            SearchResult(
+                title=" ".join(a.stripped_strings),
+                url=href,
+                snippet=" ".join(sn.stripped_strings) if sn else "",
+                engine="DuckDuckGo",
+            )
+        )
+    return out[:10]
+
+
+async def search_bing(query: str) -> list[SearchResult]:
+    url = f"https://www.bing.com/search?q={quote(query)}&setlang=es"
+    try:
+        raw = await fetch_html(url, SEARCH_TTL)
+    except Exception:
+        return []
+    soup = BeautifulSoup(raw, "html.parser")
+    out: list[SearchResult] = []
+    for node in soup.select("li.b_algo"):
+        a = node.select_one("h2 a")
+        if not a or not a.get("href"):
+            continue
+        sn = node.select_one(".b_caption p")
+        out.append(
+            SearchResult(
+                title=" ".join(a.stripped_strings),
+                url=a["href"],
+                snippet=" ".join(sn.stripped_strings) if sn else "",
+                engine="Bing",
+            )
+        )
+    return out[:10]
+
+
+async def web_search(query: str, limit: int = 8) -> list[SearchResult]:
+    key = f"websearch:{query.lower().strip()}"
+    cached = cache_get(key, SEARCH_TTL)
+    if cached is not None:
+        return [SearchResult(**x) for x in cached]
+
+    ddg, bing = await asyncio.gather(search_ddg(query), search_bing(query))
+    seen: set[str] = set()
+    merged: list[SearchResult] = []
+    for item in ddg + bing:
+        clean = item.url.split("#")[0]
+        if clean in seen or not clean.startswith("http"):
+            continue
+        seen.add(clean)
+        item.url = clean
+        merged.append(item)
+        if len(merged) >= limit:
+            break
+    cache_set(key, [asdict(x) for x in merged])
+    return merged
+
+
+def clean_team_title(title: str) -> str:
+    title = html.unescape(title)
+    title = re.sub(r"\s*[-|–]\s*ESPN.*$", "", title, flags=re.I)
+    title = re.sub(r"\s+(Scores|Resultados|Fixtures|Schedule|Stats|Estadísticas|Noticias).*", "", title, flags=re.I)
+    return re.sub(r"\s+", " ", title).strip(" -|")
+
+
+def candidate_from_url(title: str, url: str) -> dict[str, Any] | None:
+    m = re.search(r"/(?:soccer/team|football/team|futbol/equipo)/_/id/(\d+)(?:/([^?#]+))?", url)
+    if not m:
+        return None
+    team_id = int(m.group(1))
+    name = clean_team_title(title)
+    if not name or len(name) > 80:
+        slug = (m.group(2) or "").replace("%20", " ").replace("-", " ")
+        name = slug.title() or f"Equipo {team_id}"
     return {
-        "ppg": ppg,
-        "gf": gf,
-        "ga": ga,
-        "form_score": form_score,
-        "form": form,
-        "yellow": yellow_total / played if played else 1.8,
-        "red": red_total / played if played else 0.08,
+        "id": team_id,
+        "nombre": name,
+        "pais": "Fuente web ESPN",
+        "logo": f"https://a.espncdn.com/i/teamlogos/soccer/500/{team_id}.png",
+        "fuente": url,
     }
 
-def standing_rank(data: dict[str, Any], team_id: int):
-    try:
-        groups = data["response"][0]["league"]["standings"]
-        rows = [row for group in groups for row in group]
-        for row in rows:
-            if int(row["team"]["id"]) == int(team_id):
-                return int(row["rank"]), len(rows)
-    except Exception:
-        pass
-    return None, None
 
-def table_adjust(rank, total):
-    if not rank or not total or total <= 1:
-        return 0.0
-    return 1 - 2 * ((rank - 1) / (total - 1))
+async def discover_teams(query: str) -> list[dict[str, Any]]:
+    key = f"teams:{query.lower().strip()}"
+    cached = cache_get(key, SEARCH_TTL)
+    if cached is not None:
+        return cached
 
-def extract_1x2_market(odds_data: dict[str, Any]):
-    home, draw, away = [], [], []
-    try:
-        for item in odds_data.get("response", []):
-            for bookmaker in item.get("bookmakers", []):
-                for bet in bookmaker.get("bets", []):
-                    name = (bet.get("name") or "").lower()
-                    if name not in {"match winner", "1x2"}:
-                        continue
-                    values = {
-                        str(v.get("value", "")).lower(): v.get("odd")
-                        for v in bet.get("values", [])
-                    }
-                    oh = values.get("home") or values.get("1")
-                    od = values.get("draw") or values.get("x")
-                    oa = values.get("away") or values.get("2")
-                    if oh and od and oa:
-                        ph, pd, pa = 1 / float(oh), 1 / float(od), 1 / float(oa)
-                        s = ph + pd + pa
-                        home.append(ph / s * 100)
-                        draw.append(pd / s * 100)
-                        away.append(pa / s * 100)
-        if home:
-            return (
-                sum(home) / len(home),
-                sum(draw) / len(draw),
-                sum(away) / len(away),
-            )
-    except Exception:
-        pass
+    direct = await search_espn_direct(query)
+    search_query = f'site:espn.com/soccer/team/_/id "{query}" fútbol'
+    web = await web_search(search_query, 12)
+    web_es = await web_search(f'site:espndeportes.espn.com/futbol/equipo/_/id "{query}"', 8)
+
+    query_tokens = {t for t in re.findall(r"[a-záéíóúñ0-9]+", query.lower()) if len(t) > 1}
+    candidates: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for r in direct + web + web_es:
+        c = candidate_from_url(r.title, r.url)
+        if not c or c["id"] in seen:
+            continue
+        name_tokens = set(re.findall(r"[a-záéíóúñ0-9]+", c["nombre"].lower()))
+        if query_tokens and not (query_tokens & name_tokens):
+            continue
+        seen.add(c["id"])
+        candidates.append(c)
+        if len(candidates) >= 12:
+            break
+
+    cache_set(key, candidates)
+    return candidates
+
+
+def text_of(node) -> str:
+    return " ".join(node.stripped_strings) if node else ""
+
+
+def extract_team_links(row) -> list[dict[str, Any]]:
+    out = []
+    seen = set()
+    for a in row.find_all("a", href=True):
+        href = a.get("href", "")
+        m = re.search(r"/(?:soccer/team|football/team|futbol/equipo)/_/id/(\d+)(?:/([^?#]+))?", href)
+        if not m:
+            continue
+        tid = int(m.group(1))
+        if tid in seen:
+            continue
+        seen.add(tid)
+        name = text_of(a)
+        if not name:
+            name = (m.group(2) or "").replace("-", " ").title()
+        if href.startswith("/"):
+            href = "https://www.espn.com" + href
+        out.append({"id": tid, "name": name, "url": href})
+    return out
+
+
+def extract_game_url(row) -> str | None:
+    for a in row.find_all("a", href=True):
+        href = a.get("href", "")
+        if re.search(r"/(?:soccer|football|futbol)/(?:match|partido)/_/gameId/\d+", href):
+            if href.startswith("/"):
+                href = "https://www.espn.com" + href
+            return href
     return None
 
-def injury_counts(data: dict[str, Any], home_id: int, away_id: int) -> tuple[int, int]:
-    home_count = 0
-    away_count = 0
-    for item in (data or {}).get("response", []):
+
+def extract_iso_from_node(node) -> str | None:
+    if not node:
+        return None
+    for tag in [node] + list(node.find_all(True)):
+        for attr in ("datetime", "data-date", "data-time", "data-dt"):
+            val = tag.attrs.get(attr)
+            if isinstance(val, str) and re.match(r"20\d\d-\d\d-\d\d[T ]", val):
+                return val
+    # ESPN suele incrustar timestamps ISO en atributos/JSON del documento.
+    m = re.search(r"20\d\d-\d\d-\d\dT\d\d:\d\d(?::\d\d)?(?:Z|[+-]\d\d:?\d\d)", str(node))
+    return m.group(0) if m else None
+
+
+def parse_event_start_from_html(raw: str) -> datetime | None:
+    soup = BeautifulSoup(raw, "html.parser")
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
         try:
-            tid = int((item.get("team") or {}).get("id"))
+            data = json.loads(script.string or script.get_text() or "{}")
         except Exception:
             continue
-        if tid == int(home_id):
-            home_count += 1
-        elif tid == int(away_id):
-            away_count += 1
-    return home_count, away_count
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            start = item.get("startDate")
+            if start:
+                try:
+                    dt = dateparser.isoparse(start)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=TZ)
+                    return dt.astimezone(TZ)
+                except Exception:
+                    pass
+    # Fallback: timestamps UTC explícitos del contenido.
+    iso_candidates = re.findall(r"20\d\d-\d\d-\d\dT\d\d:\d\d(?::\d\d)?(?:\.\d+)?Z", raw)
+    now = now_chile()
+    for iso in iso_candidates:
+        try:
+            dt = dateparser.isoparse(iso).astimezone(TZ)
+            if now - timedelta(days=2) <= dt <= now + timedelta(days=370):
+                return dt
+        except Exception:
+            continue
+    return None
 
-async def recent_context(home: str, away: str, referee: str, competition: str, date_text: str):
-    """
-    OPCIONAL. No consume cuota API-Sports.
-    Si OPENAI_API_KEY no está configurada, el análisis sigue funcionando.
-    """
-    if not OPENAI_API_KEY or OpenAI is None:
-        return {}
 
-    prompt = f"""
-Analiza información PREPARTIDO muy reciente y verificable para:
-{home} vs {away}
-Competición: {competition}
-Fecha: {date_text}
-Árbitro: {referee or "no informado"}
-
-Prioriza fuentes oficiales del torneo, clubes y medios reputados.
-No uses prestigio histórico del club.
-Busca sólo información que pueda modificar una predicción actual:
-lesiones, suspensiones, cambios de técnico, rotaciones anunciadas, árbitro y VAR.
-
-Devuelve SOLO JSON válido:
-{{
-  "bajas_local": 0,
-  "bajas_visita": 0,
-  "sancionados_local": 0,
-  "sancionados_visita": 0,
-  "cambio_tecnico_local": false,
-  "cambio_tecnico_visita": false,
-  "arbitro_amarillas_promedio": null,
-  "arbitro_rojas_promedio": null,
-  "var": null,
-  "calidad_contexto": 0,
-  "resumen": ""
-}}
-"""
+def parse_fixture_date_text(date_text: str, time_text: str) -> datetime | None:
+    if not date_text:
+        return None
+    now = now_chile()
+    cleaned = re.sub(r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s*", "", date_text, flags=re.I)
+    year = now.year
+    combo = f"{cleaned} {year} {time_text}".strip()
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = await asyncio.to_thread(
-            client.responses.create,
-            model=OPENAI_MODEL,
-            tools=[{"type": "web_search"}],
-            input=prompt,
-            store=False,
-        )
-        match = re.search(r"\{.*\}", response.output_text, re.S)
-        return json.loads(match.group(0)) if match else {}
+        dt = dateparser.parse(combo, fuzzy=True, default=now.replace(month=1, day=1, hour=12, minute=0, second=0, microsecond=0))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ)
+        dt = dt.astimezone(TZ)
+        # En diciembre, una fecha de enero/febrero probablemente corresponde al año siguiente.
+        if dt < now - timedelta(days=30):
+            dt = dt.replace(year=dt.year + 1)
+        return dt
     except Exception:
-        return {}
+        return None
+
+
+async def get_next_fixture(team_id: int) -> dict[str, Any]:
+    url = f"https://www.espn.com/soccer/team/fixtures/_/id/{team_id}"
+    raw = await fetch_html(url)
+    soup = BeautifulSoup(raw, "html.parser")
+    now = now_chile()
+    fixtures: list[dict[str, Any]] = []
+
+    for row in soup.find_all("tr"):
+        teams = extract_team_links(row)
+        if len(teams) < 2 or team_id not in {t["id"] for t in teams}:
+            continue
+        cells = [text_of(td) for td in row.find_all(["td", "th"])]
+        if not cells:
+            continue
+        row_text = " | ".join(cells)
+        if re.search(r"\bFT\b|FT-Pens|Final", row_text, flags=re.I):
+            continue
+        game_url = extract_game_url(row)
+        iso = extract_iso_from_node(row)
+        dt = None
+        if iso:
+            try:
+                dt = dateparser.isoparse(iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=TZ)
+                dt = dt.astimezone(TZ)
+            except Exception:
+                dt = None
+
+        date_text = cells[0] if cells else ""
+        time_text = ""
+        for c in cells[1:]:
+            if re.search(r"\b\d{1,2}:\d{2}\s*(?:AM|PM)\b|\bTBD\b", c, flags=re.I):
+                time_text = c
+                break
+        if not dt and "TBD" not in time_text.upper():
+            dt = parse_fixture_date_text(date_text, time_text)
+
+        # Si tenemos página del partido, intentamos una hora absoluta antes de mostrarla.
+        if game_url:
+            try:
+                match_raw = await fetch_html(game_url)
+                precise = parse_event_start_from_html(match_raw)
+                if precise:
+                    dt = precise
+            except Exception:
+                pass
+
+        if dt and dt < now - timedelta(hours=3):
+            continue
+
+        # El primer enlace suele ser local y el segundo visita.
+        home = teams[0]
+        away = teams[1]
+        competition = competition_cell(row) or "Competición no identificada"
+
+        fixtures.append(
+            {
+                "home": home,
+                "away": away,
+                "dt": dt,
+                "date_text": date_text,
+                "time_text": time_text,
+                "competition": competition,
+                "game_url": game_url,
+                "source_url": url,
+            }
+        )
+
+    if not fixtures:
+        raise RuntimeError("La fuente web no entregó un próximo partido identificable para este equipo.")
+
+    # Priorizamos fecha absoluta; los TBD quedan al final conservando orden de ESPN.
+    fixtures.sort(key=lambda x: x["dt"] or now + timedelta(days=365))
+    return fixtures[0]
+
+
+@dataclass
+class ResultRow:
+    home_id: int | None
+    away_id: int | None
+    home_name: str
+    away_name: str
+    home_goals: int
+    away_goals: int
+    competition: str
+
+
+async def get_results(team_id: int, limit: int = 15) -> list[ResultRow]:
+    url = f"https://www.espn.com/soccer/team/results/_/id/{team_id}"
+    raw = await fetch_html(url)
+    soup = BeautifulSoup(raw, "html.parser")
+    out: list[ResultRow] = []
+    for row in soup.find_all("tr"):
+        teams = extract_team_links(row)
+        if len(teams) < 2 or team_id not in {t["id"] for t in teams}:
+            continue
+        cells = [text_of(td) for td in row.find_all(["td", "th"])]
+        row_text = " | ".join(cells)
+        score = re.search(r"(?<!\d)(\d{1,2})\s*[-–]\s*(\d{1,2})(?!\d)", row_text)
+        if not score or not re.search(r"FT|Final", row_text, flags=re.I):
+            continue
+        hg, ag = int(score.group(1)), int(score.group(2))
+        competition = competition_cell(row)
+        out.append(
+            ResultRow(
+                home_id=teams[0]["id"],
+                away_id=teams[1]["id"],
+                home_name=teams[0]["name"],
+                away_name=teams[1]["name"],
+                home_goals=hg,
+                away_goals=ag,
+                competition=competition,
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+def summarize_results(rows: list[ResultRow], team_id: int, venue: str | None = None, n: int = 10) -> dict[str, Any]:
+    chosen = []
+    for r in rows:
+        is_home = r.home_id == team_id
+        is_away = r.away_id == team_id
+        if not (is_home or is_away):
+            continue
+        if venue == "home" and not is_home:
+            continue
+        if venue == "away" and not is_away:
+            continue
+        chosen.append(r)
+        if len(chosen) >= n:
+            break
+
+    if not chosen:
+        return {"played": 0, "ppg": 1.25, "gf": 1.2, "ga": 1.2, "form": "", "wins": 0, "draws": 0, "losses": 0}
+
+    pts = gf = ga = wins = draws = losses = 0
+    form = []
+    for r in chosen:
+        if r.home_id == team_id:
+            a, b = r.home_goals, r.away_goals
+        else:
+            a, b = r.away_goals, r.home_goals
+        gf += a
+        ga += b
+        if a > b:
+            wins += 1
+            pts += 3
+            form.append("G")
+        elif a == b:
+            draws += 1
+            pts += 1
+            form.append("E")
+        else:
+            losses += 1
+            form.append("P")
+    played = len(chosen)
+    return {
+        "played": played,
+        "ppg": pts / played,
+        "gf": gf / played,
+        "ga": ga / played,
+        "form": "".join(form),
+        "wins": wins,
+        "draws": draws,
+        "losses": losses,
+    }
+
+
+async def get_standing(team_id: int, team_name: str) -> dict[str, Any]:
+    url = f"https://www.espn.com/soccer/team/_/id/{team_id}"
+    raw = await fetch_html(url)
+    soup = BeautifulSoup(raw, "html.parser")
+    target = re.sub(r"\s+", " ", team_name).lower().strip()
+    for table in soup.find_all("table"):
+        headers = [text_of(th).upper() for th in table.find_all("th")]
+        header_text = " ".join(headers)
+        if not any(x in header_text for x in ["GP", "PTS", " P ", "J "]):
+            continue
+        rows = table.find_all("tr")
+        parsed_rows = []
+        for row in rows:
+            cells = [text_of(td) for td in row.find_all(["td", "th"])]
+            if len(cells) < 5:
+                continue
+            parsed_rows.append(cells)
+        for idx, cells in enumerate(parsed_rows, start=1):
+            joined = " ".join(cells).lower()
+            if target not in joined and not all(tok in joined for tok in target.split()[:2]):
+                continue
+            nums = []
+            for c in cells:
+                if re.fullmatch(r"[+-]?\d+", c.strip()):
+                    nums.append(int(c))
+            # ESPN: GP W D L GD P. Tomamos valores desde el final cuando están disponibles.
+            played = wins = draws = losses = gd = points = None
+            if len(nums) >= 6:
+                played, wins, draws, losses, gd, points = nums[-6:]
+            return {
+                "rank": idx,
+                "total": len(parsed_rows),
+                "played": played,
+                "wins": wins,
+                "draws": draws,
+                "losses": losses,
+                "gd": gd,
+                "points": points,
+                "source_url": url,
+            }
+    # Fallback al encabezado: "2nd in ..."
+    page_text = text_of(soup)
+    m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)\s+in\s+([^\n]{3,80})", page_text, re.I)
+    if m:
+        return {"rank": int(m.group(1)), "total": None, "source_url": url}
+    return {"rank": None, "total": None, "source_url": url}
+
+
+async def get_discipline(team_id: int, played_hint: int | None = None) -> dict[str, Any]:
+    urls = [
+        f"https://www.espn.com/soccer/team/stats/_/id/{team_id}/view/discipline",
+        f"https://www.espn.com/soccer/team/stats?id={team_id}&view=discipline",
+    ]
+    for url in urls:
+        try:
+            raw = await fetch_html(url)
+        except Exception:
+            continue
+        soup = BeautifulSoup(raw, "html.parser")
+        for table in soup.find_all("table"):
+            headers = [text_of(th).strip().lower() for th in table.find_all("th")]
+            h = " ".join(headers)
+            if "yc" not in h or "rc" not in h:
+                continue
+            yc_total = rc_total = 0
+            max_p = 0
+            for row in table.find_all("tr"):
+                cells = [text_of(td).strip() for td in row.find_all("td")]
+                if len(cells) < 4:
+                    continue
+                ints = []
+                for c in cells:
+                    if re.fullmatch(r"\d+", c):
+                        ints.append(int(c))
+                # Normalmente termina en P, YC, RC, Pts; tomamos de forma conservadora.
+                if len(ints) >= 4:
+                    p, yc, rc = ints[-4], ints[-3], ints[-2]
+                    max_p = max(max_p, p)
+                    yc_total += yc
+                    rc_total += rc
+            played = played_hint or max_p or 1
+            return {
+                "yellow_total": yc_total,
+                "red_total": rc_total,
+                "yellow_pg": yc_total / max(1, played),
+                "red_pg": rc_total / max(1, played),
+                "source_url": url,
+            }
+    return {"yellow_pg": None, "red_pg": None, "source_url": None}
+
+
+async def discover_transfermarkt_injuries(team_name: str, match_dt: datetime | None) -> dict[str, Any]:
+    query = f'site:transfermarkt.com "{team_name}" "Suspensions and injuries"'
+    results = await web_search(query, 6)
+    target = None
+    for r in results:
+        if "transfermarkt." in urlparse(r.url).netloc and "sperrenundverletzungen" in r.url:
+            target = r
+            break
+    if not target:
+        return {"count": None, "players": [], "source_url": None}
+    try:
+        raw = await fetch_html(target.url, CONTEXT_TTL)
+        soup = BeautifulSoup(raw, "html.parser")
+        players: list[str] = []
+        # Transfermarkt pone el cuadro de bajas antes del bloque "Risk of suspension".
+        risk = soup.find(string=re.compile(r"Risk of suspension", re.I))
+        stop_table = risk.find_parent("table") if risk else None
+        for table in soup.find_all("table"):
+            if stop_table is not None and table == stop_table:
+                break
+            header = text_of(table).lower()
+            if "player" not in header or not any(k in header for k in ["reason", "expected return", "since"]):
+                continue
+            for row in table.find_all("tr"):
+                cells = [text_of(td) for td in row.find_all("td")]
+                if len(cells) < 3:
+                    continue
+                # El nombre suele estar en el primer/segundo campo textual del jugador.
+                name = ""
+                a = row.find("a", href=re.compile(r"/profil/spieler/|/spieler/"))
+                if a:
+                    name = text_of(a)
+                if not name:
+                    name = cells[0]
+                name = re.sub(r"\s+", " ", name).strip()
+                if name and name.lower() not in {"player", "injuries", "suspensions"} and name not in players:
+                    players.append(name)
+            if players:
+                break
+        return {"count": len(players), "players": players[:8], "source_url": target.url}
+    except Exception:
+        return {"count": None, "players": [], "source_url": target.url}
+
+
+def parse_referee_var_from_text(text: str) -> tuple[str | None, str | None]:
+    text = re.sub(r"\s+", " ", text)
+    referee = None
+    var = None
+    patterns_ref = [
+        r"(?:Árbitro|Arbitro|Referee|Árbitro principal)\s*[:\-]\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.' -]{3,45})",
+        r"(?:será arbitrado por|will be refereed by)\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.' -]{3,45})",
+    ]
+    for p in patterns_ref:
+        m = re.search(p, text, re.I)
+        if m:
+            referee = re.split(r"\b(?:VAR|assistant|asistente|y el|with)\b|[.;]", m.group(1), maxsplit=1, flags=re.I)[0].strip(" -")
+            break
+    m = re.search(r"\bVAR\s*[:\-]\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.' -]{3,45})", text, re.I)
+    if m:
+        var = re.split(r"[.;]", m.group(1), maxsplit=1)[0].strip(" -")
+    return referee, var
+
+
+OFFICIAL_DOMAIN_HINTS = [
+    "conmebol.com", "uefa.com", "fifa.com", "anfp.cl", "afa.com.ar",
+    "premierleague.com", "laliga.com", "bundesliga.com", "legaseriea.it",
+    "ligue1.com", "cbf.com.br", "auf.org.uy", "dimayor.com.co", "ligamx.net",
+]
+
+def is_official_domain(url: str) -> bool:
+    host = (urlparse(url).netloc or "").lower()
+    return any(h in host for h in OFFICIAL_DOMAIN_HINTS)
+
+def competition_cell(row) -> str:
+    table = row.find_parent("table")
+    if table:
+        headers = [text_of(th).strip().upper() for th in table.find_all("th")]
+        data = [text_of(td).strip() for td in row.find_all("td")]
+        for i, h in enumerate(headers):
+            if "COMPETITION" in h or "COMPETICIÓN" in h:
+                if i < len(data) and data[i]:
+                    return data[i]
+    cells = [text_of(td).strip() for td in row.find_all("td")]
+    for c in reversed(cells):
+        if not c or re.search(r"^\d{1,2}:\d{2}\s*(?:AM|PM)$|^TBD$", c, re.I):
+            continue
+        if c.upper() in {"TV", "ESPN", "STAR+", "DISNEY+"}:
+            continue
+        return c
+    return ""
+
+async def discover_match_context(home: str, away: str, competition: str, dt: datetime | None) -> dict[str, Any]:
+    date_key = dt.strftime("%Y-%m-%d") if dt else "próximo partido"
+    key = f"context:{home}:{away}:{date_key}"
+    cached = cache_get(key, CONTEXT_TTL)
+    if cached is not None:
+        return cached
+
+    official_q = f'"{home}" "{away}" {competition} {date_key} sitio oficial'
+    generic_q = f'"{home}" "{away}" árbitro VAR {competition} {date_key}'
+    official_results, generic_results = await asyncio.gather(
+        web_search(official_q, 8), web_search(generic_q, 8)
+    )
+    merged = []
+    seen_urls = set()
+    for r in sorted(official_results + generic_results, key=lambda x: (0 if is_official_domain(x.url) else 1)):
+        if r.url in seen_urls:
+            continue
+        seen_urls.add(r.url)
+        merged.append(r)
+    results = merged
+    referee = var = None
+    sources = []
+    for r in results[:6]:
+        sources.append({"titulo": r.title, "url": r.url, "tipo": "Oficial" if is_official_domain(r.url) else "Árbitro/VAR"})
+        combined = f"{r.title} {r.snippet}"
+        rr, vv = parse_referee_var_from_text(combined)
+        referee = referee or rr
+        var = var or vv
+        if referee and var:
+            break
+        # Leemos sólo páginas públicas que respondan normalmente.
+        try:
+            raw = await fetch_html(r.url, CONTEXT_TTL)
+            visible = text_of(BeautifulSoup(raw, "html.parser"))[:120_000]
+            rr, vv = parse_referee_var_from_text(visible)
+            referee = referee or rr
+            var = var or vv
+        except Exception:
+            continue
+        if referee and var:
+            break
+
+    out = {"referee": referee, "var": var, "sources": sources[:4]}
+    cache_set(key, out)
+    return out
+
+
+def parse_decimal_odds_from_table(raw: str) -> tuple[float, float, float] | None:
+    soup = BeautifulSoup(raw, "html.parser")
+    for table in soup.find_all("table"):
+        headers = [text_of(x).strip().lower() for x in table.find_all("th")]
+        h = " ".join(headers)
+        if not (re.search(r"\b1\b", h) and re.search(r"\bx\b", h) and re.search(r"\b2\b", h)):
+            continue
+        for row in table.find_all("tr"):
+            vals = []
+            for td in row.find_all("td"):
+                txt = text_of(td).replace(",", ".")
+                for m in re.findall(r"(?<!\d)(1\.\d{2}|[2-9]\.\d{2}|1\d\.\d{2})(?!\d)", txt):
+                    try:
+                        vals.append(float(m))
+                    except Exception:
+                        pass
+            if len(vals) >= 3:
+                trio = vals[:3]
+                if all(1.01 <= x <= 25 for x in trio):
+                    return trio[0], trio[1], trio[2]
+    return None
+
+
+async def discover_odds(home: str, away: str) -> dict[str, Any]:
+    queries = [
+        f'site:betexplorer.com "{home}" "{away}" odds',
+        f'site:oddsportal.com "{home}" "{away}" odds',
+    ]
+    all_results: list[SearchResult] = []
+    for q in queries:
+        all_results.extend(await web_search(q, 5))
+    seen = set()
+    for r in all_results:
+        if r.url in seen:
+            continue
+        seen.add(r.url)
+        host = urlparse(r.url).netloc.lower()
+        if not any(x in host for x in ["betexplorer", "oddsportal"]):
+            continue
+        try:
+            raw = await fetch_html(r.url, CONTEXT_TTL)
+            odds = parse_decimal_odds_from_table(raw)
+            if odds:
+                oh, od, oa = odds
+                ph, pd, pa = 1 / oh, 1 / od, 1 / oa
+                s = ph + pd + pa
+                return {
+                    "raw": [oh, od, oa],
+                    "prob": [ph / s * 100, pd / s * 100, pa / s * 100],
+                    "source_url": r.url,
+                }
+        except Exception:
+            continue
+    return {"raw": None, "prob": None, "source_url": None}
+
+
+def table_score(standing: dict[str, Any]) -> float:
+    rank, total = standing.get("rank"), standing.get("total")
+    if rank and total and total > 1:
+        return 1 - 2 * ((rank - 1) / (total - 1))
+    played, points = standing.get("played"), standing.get("points")
+    if played and points is not None:
+        return clamp((points / played - 1.4) / 1.4, -1, 1)
+    return 0.0
+
+
+def injury_penalty(count: int | None) -> float:
+    if count is None:
+        return 0.0
+    return 0.035 * min(count, 6)
+
+
+def metric(selection: str, probability: float, quality: float) -> dict[str, Any]:
+    return {
+        "seleccion": selection,
+        "probabilidad": round(probability),
+        "confianza": confidence(probability, quality),
+    }
+
+
+def source_item(title: str, url: str | None, tipo: str) -> dict[str, str] | None:
+    if not url:
+        return None
+    return {"titulo": title, "url": url, "tipo": tipo}
+
 
 @app.get("/api/health")
 async def health():
     return {
         "ok": True,
         "app": APP_NAME,
-        "version": "3.1-optimizada-6-consultas",
+        "version": APP_VERSION,
         "hora_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
-        "datos_deportivos": bool(API_SPORTS_KEY),
-        "openai_contexto": bool(OPENAI_API_KEY),
-        "modo": "consulta por equipo",
-        "consultas_al_abrir": 0,
+        "modo": "web-directa",
+        "api_deportiva": False,
+        "openai_api": False,
+        "requiere_claves": False,
     }
+
 
 @app.get("/api/search")
 async def search(q: str = Query(min_length=2, max_length=80)):
-    key = f"search:{q.lower().strip()}"
-    cached = cache_read(key, SEARCH_TTL)
-    if cached is not None:
-        return {"response": cached, "cache": True, "consultas_api_sports": 0}
+    teams = await discover_teams(q.strip())
+    if not teams:
+        raise HTTPException(
+            status_code=502,
+            detail="No pude localizar el club en las fuentes web en este momento. Prueba con el nombre completo del equipo.",
+        )
+    return {"response": teams, "modo": "web-directa"}
 
-    data = await api_get("teams", {"search": q})
-    result = []
-    for row in data.get("response", []):
-        team = row.get("team") or {}
-        venue = row.get("venue") or {}
-        result.append({
-            "id": team.get("id"),
-            "nombre": team.get("name"),
-            "pais": team.get("country"),
-            "logo": team.get("logo"),
-            "ciudad": venue.get("city"),
-        })
-
-    result = result[:15]
-    cache_write(key, result)
-    return {"response": result, "cache": False, "consultas_api_sports": 1}
 
 @app.get("/api/team/{team_id}/next")
-async def team_next(team_id: int):
-    team_cache_key = f"team-analysis:{team_id}"
-    cached = cache_read(team_cache_key, ANALYSIS_TTL)
+async def analyze_next(team_id: int, name: str = Query(default="", max_length=100)):
+    key = f"analysis:{team_id}"
+    cached = cache_get(key, ANALYSIS_TTL)
     if cached is not None:
-        cached = dict(cached)
-        cached["cache"] = True
-        cached["consultas_api_sports"] = 0
-        return cached
+        result = dict(cached)
+        result["cache"] = True
+        return result
 
-    global LAST_ANALYSIS_AT, LAST_ANALYSIS_TEAM
-    elapsed = time.time() - LAST_ANALYSIS_AT
-    if LAST_ANALYSIS_AT and team_id != LAST_ANALYSIS_TEAM and elapsed < ANALYSIS_COOLDOWN:
-        wait = max(1, math.ceil(ANALYSIS_COOLDOWN - elapsed))
-        raise HTTPException(
-            status_code=429,
-            detail=f"Espera {wait} segundos antes de analizar un equipo diferente."
-        )
+    try:
+        fixture = await get_next_fixture(team_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    LAST_ANALYSIS_AT = time.time()
-    LAST_ANALYSIS_TEAM = team_id
+    home = fixture["home"]
+    away = fixture["away"]
+    home_id, away_id = int(home["id"]), int(away["id"])
+    home_name, away_name = home["name"], away["name"]
+    dt: datetime | None = fixture.get("dt")
 
-    # Consulta 1 del análisis: próximo partido.
-    fixture_data = await api_get(
-        "fixtures",
-        {"team": team_id, "next": 1, "timezone": "America/Santiago"},
-    )
-    if not fixture_data.get("response"):
-        raise HTTPException(status_code=404, detail="No se encontró próximo partido.")
-
-    fx = fixture_data["response"][0]
-    fixture_id = int(fx["fixture"]["id"])
-    league = fx["league"]
-    teams = fx["teams"]
-    season = league["season"]
-    league_id = league["id"]
-    home_id = teams["home"]["id"]
-    away_id = teams["away"]["id"]
-    chile_iso, chile_time = to_chile(fx["fixture"]["date"])
-
-    async def safe(coro):
-        try:
-            return await coro
-        except Exception:
-            return {}
-
-    # Consultas 2 a 6 del análisis profundo.
-    # Total al seleccionar equipo: 6 respuestas API-Sports.
-    # Se eliminan "predictions" y "lineups" para mantener margen bajo el límite de 10/min.
-    standings, home_raw, away_raw, odds, injuries = await asyncio.gather(
-        safe(api_get("standings", {"league": league_id, "season": season})),
-        safe(api_get("teams/statistics", {"league": league_id, "season": season, "team": home_id})),
-        safe(api_get("teams/statistics", {"league": league_id, "season": season, "team": away_id})),
-        safe(api_get("odds", {"fixture": fixture_id})),
-        safe(api_get("injuries", {"fixture": fixture_id})),
+    # Lecturas principales en paralelo, todas desde páginas web públicas.
+    home_results_c, away_results_c, home_stand_c, away_stand_c = await asyncio.gather(
+        get_results(home_id),
+        get_results(away_id),
+        get_standing(home_id, home_name),
+        get_standing(away_id, away_name),
+        return_exceptions=True,
     )
 
-    home_stats = team_stats(home_raw)
-    away_stats = team_stats(away_raw)
-    home_injuries, away_injuries = injury_counts(injuries, home_id, away_id)
+    home_results = home_results_c if isinstance(home_results_c, list) else []
+    away_results = away_results_c if isinstance(away_results_c, list) else []
+    home_stand = home_stand_c if isinstance(home_stand_c, dict) else {"rank": None, "total": None}
+    away_stand = away_stand_c if isinstance(away_stand_c, dict) else {"rank": None, "total": None}
 
-    home_rank, table_size = standing_rank(standings, home_id)
-    away_rank, table_size2 = standing_rank(standings, away_id)
-    table_size = table_size or table_size2
+    h10 = summarize_results(home_results, home_id, n=10)
+    a10 = summarize_results(away_results, away_id, n=10)
+    h5 = summarize_results(home_results, home_id, n=5)
+    a5 = summarize_results(away_results, away_id, n=5)
+    hvenue = summarize_results(home_results, home_id, venue="home", n=8)
+    avenue = summarize_results(away_results, away_id, venue="away", n=8)
 
-    home_strength = (
-        0.40 * home_stats["form_score"]
-        + 0.25 * home_stats["ppg"]
-        + 0.20 * (home_stats["gf"] - home_stats["ga"] + 1.5)
-        + 0.15 * (table_adjust(home_rank, table_size) + 1)
-        + 0.18  # localía
-        - 0.025 * min(home_injuries, 5)
+    home_played_hint = home_stand.get("played") or h10.get("played")
+    away_played_hint = away_stand.get("played") or a10.get("played")
+
+    home_disc_c, away_disc_c, home_inj_c, away_inj_c, context_c, odds_c = await asyncio.gather(
+        get_discipline(home_id, home_played_hint),
+        get_discipline(away_id, away_played_hint),
+        discover_transfermarkt_injuries(home_name, dt),
+        discover_transfermarkt_injuries(away_name, dt),
+        discover_match_context(home_name, away_name, fixture.get("competition") or "", dt),
+        discover_odds(home_name, away_name),
+        return_exceptions=True,
     )
-    away_strength = (
-        0.40 * away_stats["form_score"]
-        + 0.25 * away_stats["ppg"]
-        + 0.20 * (away_stats["gf"] - away_stats["ga"] + 1.5)
-        + 0.15 * (table_adjust(away_rank, table_size) + 1)
-        - 0.025 * min(away_injuries, 5)
+
+    home_disc = home_disc_c if isinstance(home_disc_c, dict) else {"yellow_pg": None, "red_pg": None}
+    away_disc = away_disc_c if isinstance(away_disc_c, dict) else {"yellow_pg": None, "red_pg": None}
+    home_inj = home_inj_c if isinstance(home_inj_c, dict) else {"count": None, "players": [], "source_url": None}
+    away_inj = away_inj_c if isinstance(away_inj_c, dict) else {"count": None, "players": [], "source_url": None}
+    context = context_c if isinstance(context_c, dict) else {"referee": None, "var": None, "sources": []}
+    odds = odds_c if isinstance(odds_c, dict) else {"prob": None, "source_url": None, "raw": None}
+
+    # Fuerza actual. Prestigio histórico = 0%.
+    h_strength = (
+        0.28 * h10["ppg"]
+        + 0.20 * h5["ppg"]
+        + 0.16 * (h10["gf"] - h10["ga"] + 1.4)
+        + 0.15 * hvenue["ppg"]
+        + 0.11 * (table_score(home_stand) + 1)
+        + 0.18  # localía actual
+        - injury_penalty(home_inj.get("count"))
+    )
+    a_strength = (
+        0.28 * a10["ppg"]
+        + 0.20 * a5["ppg"]
+        + 0.16 * (a10["gf"] - a10["ga"] + 1.4)
+        + 0.15 * avenue["ppg"]
+        + 0.11 * (table_score(away_stand) + 1)
+        - injury_penalty(away_inj.get("count"))
     )
 
-    z = home_strength - away_strength
-    mh = 100 / (1 + math.exp(-1.15 * z))
-    md = clamp(29 - abs(z) * 5, 18, 31)
+    z = h_strength - a_strength
+    mh = 100 / (1 + math.exp(-1.08 * z))
+    md = clamp(28.5 - abs(z) * 5.0, 18, 31)
     ma = 100 - mh
     mh, md, ma = normalize3(mh * (100 - md) / 100, md, ma * (100 - md) / 100)
 
-    market = extract_1x2_market(odds)
-    if market:
-        oh, od, oa = market
-        # Modelo propio 75% + consenso de mercado 25%.
-        fh = 0.75 * mh + 0.25 * oh
-        fd = 0.75 * md + 0.25 * od
-        fa = 0.75 * ma + 0.25 * oa
+    if odds.get("prob"):
+        oh, od, oa = odds["prob"]
+        # Las cuotas son factor actual, no autoridad absoluta.
+        fh = 0.78 * mh + 0.22 * oh
+        fd = 0.78 * md + 0.22 * od
+        fa = 0.78 * ma + 0.22 * oa
+        fh, fd, fa = normalize3(fh, fd, fa)
     else:
         fh, fd, fa = mh, md, ma
 
-    fh, fd, fa = normalize3(fh, fd, fa)
+    winner = max({"1": fh, "X": fd, "2": fa}.items(), key=lambda x: x[1])
+    double = max({"1X": fh + fd, "X2": fd + fa, "12": fh + fa}.items(), key=lambda x: x[1])
 
-    winner_options = {"1": fh, "X": fd, "2": fa}
-    winner_sel, winner_prob = max(winner_options.items(), key=lambda item: item[1])
-
-    double_options = {"1X": fh + fd, "X2": fd + fa, "12": fh + fa}
-    double_sel, double_prob = max(double_options.items(), key=lambda item: item[1])
-
-    lambda_home = clamp((home_stats["gf"] + away_stats["ga"]) / 2 * 1.06, 0.25, 3.5)
-    lambda_away = clamp((away_stats["gf"] + home_stats["ga"]) / 2 * 0.96, 0.20, 3.5)
+    # Goles: forma reciente + rendimiento local/visita.
+    lambda_home = clamp(
+        0.52 * ((h10["gf"] + a10["ga"]) / 2)
+        + 0.48 * ((hvenue["gf"] + avenue["ga"]) / 2)
+        + 0.10,
+        0.25,
+        3.5,
+    )
+    lambda_away = clamp(
+        0.52 * ((a10["gf"] + h10["ga"]) / 2)
+        + 0.48 * ((avenue["gf"] + hvenue["ga"]) / 2),
+        0.20,
+        3.5,
+    )
     lambda_total = lambda_home + lambda_away
-
     btts_yes = (1 - math.exp(-lambda_home)) * (1 - math.exp(-lambda_away))
     if btts_yes >= 0.5:
         btts_sel, btts_prob = "Sí", btts_yes * 100
     else:
         btts_sel, btts_prob = "No", (1 - btts_yes) * 100
-
     goals_sel, goals_prob = best_line(lambda_total, [1.5, 2.5, 3.5])
 
-    context = await recent_context(
-        teams["home"]["name"],
-        teams["away"]["name"],
-        fx["fixture"].get("referee") or "",
-        league["name"],
-        chile_iso[:10],
-    )
+    # Disciplina. Si una fuente no entrega datos, usamos un baseline prudente y reducimos calidad.
+    hy = home_disc.get("yellow_pg") if home_disc.get("yellow_pg") is not None else 2.1
+    ay = away_disc.get("yellow_pg") if away_disc.get("yellow_pg") is not None else 2.1
+    hr = home_disc.get("red_pg") if home_disc.get("red_pg") is not None else 0.08
+    ar = away_disc.get("red_pg") if away_disc.get("red_pg") is not None else 0.08
+    yellow_sel, yellow_prob = best_line(clamp(hy + ay, 1.5, 9.0), [2.5, 3.5, 4.5, 5.5])
+    red_sel, red_prob = best_line(clamp(hr + ar, 0.03, 1.4), [0.5, 1.5])
 
-    referee_yellow = context.get("arbitro_amarillas_promedio")
-    referee_red = context.get("arbitro_rojas_promedio")
-    try:
-        referee_yellow = float(referee_yellow) if referee_yellow is not None else None
-    except Exception:
-        referee_yellow = None
-    try:
-        referee_red = float(referee_red) if referee_red is not None else None
-    except Exception:
-        referee_red = None
-
-    team_yellow = home_stats["yellow"] + away_stats["yellow"]
-    team_red = home_stats["red"] + away_stats["red"]
-
-    lambda_yellow = clamp(
-        0.65 * team_yellow + 0.35 * (referee_yellow if referee_yellow is not None else team_yellow),
-        1.0,
-        9.0,
-    )
-    lambda_red = clamp(
-        0.70 * team_red + 0.30 * (referee_red if referee_red is not None else team_red),
-        0.02,
-        1.2,
-    )
-
-    yellow_sel, yellow_prob = best_line(lambda_yellow, [2.5, 3.5, 4.5, 5.5])
-    red_sel, red_prob = best_line(lambda_red, [0.5, 1.5])
-
-    signals = sum(
-        bool(item.get("response"))
-        for item in [standings, home_raw, away_raw, odds, injuries]
-    )
-    quality = round(signals / 5 * 85)
-    if context:
-        quality = round(0.85 * quality + 0.15 * float(context.get("calidad_contexto") or 0))
+    quality = 20  # próximo partido identificado
+    if len(home_results) >= 5 and len(away_results) >= 5:
+        quality += 30
+    elif home_results or away_results:
+        quality += 15
+    if home_stand.get("rank") is not None and away_stand.get("rank") is not None:
+        quality += 15
+    if home_disc.get("yellow_pg") is not None and away_disc.get("yellow_pg") is not None:
+        quality += 10
+    if home_inj.get("count") is not None and away_inj.get("count") is not None:
+        quality += 10
+    if context.get("referee"):
+        quality += 5
+    if odds.get("prob"):
+        quality += 10
     quality = int(clamp(quality, 0, 100))
 
-    def market_obj(selection, probability):
-        return {
-            "seleccion": selection,
-            "probabilidad": round(probability),
-            "confianza": confidence(probability, quality),
-        }
+    sources = [
+        source_item("Próximo partido — ESPN", fixture.get("source_url"), "Partido"),
+        source_item(f"Resultados recientes — {home_name}", f"https://www.espn.com/soccer/team/results/_/id/{home_id}", "Forma"),
+        source_item(f"Resultados recientes — {away_name}", f"https://www.espn.com/soccer/team/results/_/id/{away_id}", "Forma"),
+        source_item(f"Tabla/estadísticas — {home_name}", home_stand.get("source_url"), "Tabla"),
+        source_item(f"Tabla/estadísticas — {away_name}", away_stand.get("source_url"), "Tabla"),
+        source_item(f"Disciplina — {home_name}", home_disc.get("source_url"), "Tarjetas"),
+        source_item(f"Disciplina — {away_name}", away_disc.get("source_url"), "Tarjetas"),
+        source_item(f"Bajas — {home_name}", home_inj.get("source_url"), "Bajas"),
+        source_item(f"Bajas — {away_name}", away_inj.get("source_url"), "Bajas"),
+        source_item("Cuotas 1X2", odds.get("source_url"), "Mercado"),
+    ]
+    sources.extend(context.get("sources") or [])
+    clean_sources = []
+    seen_urls = set()
+    for s in sources:
+        if not s or not s.get("url") or s["url"] in seen_urls:
+            continue
+        seen_urls.add(s["url"])
+        clean_sources.append(s)
+        if len(clean_sources) >= 10:
+            break
+
+    if dt:
+        fecha = dt.strftime("%d/%m/%Y")
+        hora = dt.strftime("%H:%M")
+        iso = dt.isoformat()
+    else:
+        fecha = fixture.get("date_text") or "Por confirmar"
+        hora = "Por confirmar"
+        iso = None
 
     warnings = []
-    warnings.append("Alineaciones no se consultan automáticamente para ahorrar cuota API-Sports.")
-    if not odds.get("response"):
-        warnings.append("Cuotas no disponibles para este partido.")
-    if not context:
-        warnings.append("Contexto OpenAI no configurado; se usa sólo la base deportiva.")
+    if not odds.get("prob"):
+        warnings.append("No se encontraron cuotas 1X2 públicas y estructuradas; no se usaron en el cálculo.")
+    if not context.get("referee"):
+        warnings.append("Árbitro/VAR todavía no confirmados en una fuente web legible.")
+    if home_inj.get("count") is None or away_inj.get("count") is None:
+        warnings.append("Alguna fuente de bajas no respondió o no entregó una tabla legible.")
 
     result = {
-        "fixture_id": fixture_id,
-        "hora_chile": chile_time,
-        "fecha_hora_chile": chile_iso,
-        "competicion": league["name"],
-        "pais": league.get("country") or "",
-        "local": teams["home"]["name"],
-        "visita": teams["away"]["name"],
-        "arbitro": fx["fixture"].get("referee"),
-        "ganador": market_obj(winner_sel, winner_prob),
-        "doble_oportunidad": market_obj(double_sel, double_prob),
-        "ambos_marcan": market_obj(btts_sel, btts_prob),
-        "tarjetas_amarillas": market_obj(yellow_sel, yellow_prob),
-        "tarjetas_rojas": market_obj(red_sel, red_prob),
-        "goles_totales": market_obj(goals_sel, goals_prob),
-        "forma_local": home_stats["form"],
-        "forma_visita": away_stats["form"],
-        "tabla_local": home_rank,
-        "tabla_visita": away_rank,
-        "bajas_local": home_injuries,
-        "bajas_visita": away_injuries,
+        "modo": "web-directa",
+        "local": home_name,
+        "visita": away_name,
+        "fecha_chile": fecha,
+        "hora_chile": hora,
+        "fecha_hora_chile": iso,
+        "competicion": fixture.get("competition") or "Competición no identificada",
+        "ganador": metric(winner[0], winner[1], quality),
+        "doble_oportunidad": metric(double[0], double[1], quality),
+        "ambos_marcan": metric(btts_sel, btts_prob, quality),
+        "tarjetas_amarillas": metric(yellow_sel, yellow_prob, quality),
+        "tarjetas_rojas": metric(red_sel, red_prob, quality),
+        "goles_totales": metric(goals_sel, goals_prob, quality),
+        "forma_local_5": h5["form"],
+        "forma_visita_5": a5["form"],
+        "forma_local_10": h10["form"],
+        "forma_visita_10": a10["form"],
+        "tabla_local": home_stand.get("rank"),
+        "tabla_visita": away_stand.get("rank"),
+        "bajas_local": home_inj.get("count"),
+        "bajas_visita": away_inj.get("count"),
+        "bajas_local_nombres": home_inj.get("players") or [],
+        "bajas_visita_nombres": away_inj.get("players") or [],
+        "arbitro": context.get("referee"),
+        "var": context.get("var"),
+        "cuotas_1x2": odds.get("raw"),
         "calidad_datos": quality,
-        "actualizado_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
-        "contexto": context.get("resumen", "") if context else "",
+        "actualizado_chile": now_chile().strftime("%d/%m/%Y %H:%M"),
+        "fuentes": clean_sources,
         "advertencias": warnings,
         "cache": False,
-        "consultas_api_sports": 6,
+        "prestigio_historico_peso": 0,
     }
-
-    cache_write(team_cache_key, result)
+    cache_set(key, result)
     return result
+
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
