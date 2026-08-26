@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import html
 import json
 import math
@@ -23,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 APP_NAME = "Radar Fútbol"
-APP_VERSION = "4.3-web-directa"
+APP_VERSION = "4.4-web-directa"
 TZ = ZoneInfo("America/Santiago")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
@@ -47,7 +48,7 @@ CONTEXT_TTL = 20 * 60
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Safari/537.36 "
-    "RadarFutbol/4.3"
+    "RadarFutbol/4.4"
 )
 HEADERS = {
     "User-Agent": USER_AGENT,
@@ -224,6 +225,31 @@ def unwrap_ddg(url: str) -> str:
     except Exception:
         pass
     return url
+
+
+def unwrap_bing(url: str) -> str:
+    try:
+        p = urlparse(url)
+        if "bing.com" not in (p.netloc or "").lower():
+            return url
+        qs = parse_qs(p.query)
+        raw = (qs.get("u") or [None])[0]
+        if not raw:
+            return url
+        raw = unquote(raw)
+        if raw.startswith("a1"):
+            raw = raw[2:]
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode()).decode("utf-8", "ignore").strip()
+        if decoded.startswith(("http://", "https://")):
+            return decoded
+    except Exception:
+        pass
+    return url
+
+
+def clean_search_url(url: str) -> str:
+    return unwrap_bing(unwrap_ddg(url))
 
 
 def norm_text(value: str) -> str:
@@ -427,10 +453,11 @@ async def search_bing(query: str) -> list[SearchResult]:
         if not a or not a.get("href"):
             continue
         sn = node.select_one(".b_caption p")
+        href = clean_search_url(a["href"])
         out.append(
             SearchResult(
                 title=" ".join(a.stripped_strings),
-                url=a["href"],
+                url=href,
                 snippet=" ".join(sn.stripped_strings) if sn else "",
                 engine="Bing",
             )
@@ -448,7 +475,7 @@ async def web_search(query: str, limit: int = 8) -> list[SearchResult]:
     seen: set[str] = set()
     merged: list[SearchResult] = []
     for item in ddg + bing:
-        clean = item.url.split("#")[0]
+        clean = clean_search_url(item.url).split("#")[0]
         if clean in seen or not clean.startswith("http"):
             continue
         seen.add(clean)
@@ -1016,6 +1043,7 @@ async def discover_besoccer_injuries(team_name: str) -> dict[str, Any]:
     results = [r for batch in batches for r in batch]
     seen = set()
     for r in results:
+        r.url = clean_search_url(r.url)
         host = (urlparse(r.url).netloc or "").lower()
         if "besoccer" not in host or r.url in seen:
             continue
@@ -1275,6 +1303,7 @@ async def discover_match_context(home: str, away: str, competition: str, dt: dat
     nq = norm_text(competition)
     targeted = []
     if "conmebol" in nq or "sudamericana" in nq or "libertadores" in nq:
+        targeted.append(f'site:gol.conmebol.com "{home}" "{away}" "Ficha del partido"')
         targeted.append(f'site:gol.conmebol.com "{home}" "{away}" árbitro VAR')
         targeted.append(f'site:conmebol.com "{home}" "{away}" árbitro VAR')
     elif "uefa" in nq or "champions" in nq or "europa league" in nq or "conference" in nq:
@@ -1298,6 +1327,16 @@ async def discover_match_context(home: str, away: str, competition: str, dt: dat
                 continue
             seen_urls.add(r.url)
             merged.append(r)
+
+    cleaned_results = []
+    seen_clean = set()
+    for r in merged:
+        r.url = clean_search_url(r.url)
+        if r.url in seen_clean:
+            continue
+        seen_clean.add(r.url)
+        cleaned_results.append(r)
+    merged = cleaned_results
 
     merged.sort(key=lambda x: (0 if is_official_domain(x.url) else 1))
     referee = var = None
@@ -1384,6 +1423,40 @@ def _team_text_variants(name: str) -> list[str]:
             variants.append(short)
     return variants
 
+def parse_main_1x2_market(text: str, home: str, away: str) -> tuple[float, float, float] | None:
+    text = re.sub(r"\s+", " ", html.unescape(text or ""))
+    text = re.sub(r"(?<=\d),(?=\d)", ".", text)
+    anchors = ["Resultado del Partido", "Match Result", "Full Time Result", "1X2"]
+    windows = []
+    low = text.lower()
+    for anchor in anchors:
+        pos = low.find(anchor.lower())
+        if pos >= 0:
+            windows.append(text[pos:pos + 3500])
+    if not windows:
+        windows = [text[:12000]]
+
+    def price_after(window: str, labels: list[str]) -> float | None:
+        for label in labels:
+            m = re.search(rf"{re.escape(label)}.{{0,140}}?(\d{{1,2}}\.\d{{2,3}})", window, re.I)
+            if m:
+                try:
+                    val = float(m.group(1))
+                    if 1.01 <= val <= 30:
+                        return val
+                except Exception:
+                    pass
+        return None
+
+    for window in windows:
+        oh = price_after(window, _team_text_variants(home))
+        od = price_after(window, ["Empate", "Draw", "X"])
+        oa = price_after(window, _team_text_variants(away))
+        if oh is not None and od is not None and oa is not None:
+            return _valid_odds_trio([oh, od, oa])
+    return None
+
+
 def parse_decimal_odds_from_text(text: str, home: str, away: str) -> tuple[float, float, float] | None:
     text = re.sub(r"\s+", " ", html.unescape(text or ""))
     # Normalizar sólo comas decimales.
@@ -1417,10 +1490,10 @@ async def discover_odds(home: str, away: str) -> dict[str, Any]:
         return cached
 
     queries = [
+        f'site:sports.caliente.mx "{home}" "{away}" "Resultado del Partido"',
+        f'site:stake.bet.ar "{home}" "{away}" "Resultado del Partido"',
         f'site:oddschecker.com "{home}" "{away}" odds',
         f'site:sportingbet.com "{home}" "{away}"',
-        f'site:stake.bet.ar "{home}" "{away}"',
-        f'site:caliente.mx "{home}" "{away}"',
         f'site:betexplorer.com "{home}" "{away}" odds',
         f'site:oddsportal.com "{home}" "{away}" odds',
     ]
@@ -1435,11 +1508,20 @@ async def discover_odds(home: str, away: str) -> dict[str, Any]:
             all_results.append(r)
 
     allowed = ["oddschecker", "sportingbet", "stake.bet", "caliente", "betexplorer", "oddsportal"]
-    candidates = [r for r in all_results if any(x in (urlparse(r.url).netloc or "").lower() for x in allowed)]
+    candidates = []
+    seen_candidate_urls = set()
+    for r in all_results:
+        r.url = clean_search_url(r.url)
+        host = (urlparse(r.url).netloc or "").lower()
+        if not any(x in host for x in allowed) or r.url in seen_candidate_urls:
+            continue
+        seen_candidate_urls.add(r.url)
+        candidates.append(r)
 
     # 1) Snippets/resultados de búsqueda.
     for r in candidates:
-        trio = parse_decimal_odds_from_text(f"{r.title} {r.snippet}", home, away)
+        snippet_text = f"{r.title} {r.snippet}"
+        trio = parse_main_1x2_market(snippet_text, home, away) or parse_decimal_odds_from_text(snippet_text, home, away)
         if trio:
             oh, od, oa = trio
             ph, pd, pa = 1 / oh, 1 / od, 1 / oa
@@ -1462,9 +1544,11 @@ async def discover_odds(home: str, away: str) -> dict[str, Any]:
     for r, raw in zip(page_candidates, payloads):
         if not isinstance(raw, str):
             continue
-        trio = parse_decimal_odds_from_table(raw)
+        visible = text_of(BeautifulSoup(raw, "html.parser"))[:300_000]
+        trio = parse_main_1x2_market(visible, home, away)
         if not trio:
-            visible = text_of(BeautifulSoup(raw, "html.parser"))[:300_000]
+            trio = parse_decimal_odds_from_table(raw)
+        if not trio:
             trio = parse_decimal_odds_from_text(visible, home, away)
         if trio:
             oh, od, oa = trio
@@ -1482,6 +1566,19 @@ async def discover_odds(home: str, away: str) -> dict[str, Any]:
     out = {"raw": None, "prob": None, "source_url": None, "source_title": None}
     cache_set(key, out)
     return out
+
+
+def is_continental_competition(name: str) -> bool:
+    n = norm_text(name)
+    return any(token in n for token in [
+        "conmebol sudamericana",
+        "conmebol libertadores",
+        "uefa champions league",
+        "uefa europa league",
+        "uefa conference league",
+        "club world cup",
+        "mundial de clubes",
+    ])
 
 
 def table_score(standing: dict[str, Any]) -> float:
@@ -1535,7 +1632,7 @@ async def health():
         "hora_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
         "modo": "web-directa",
         "buscador": "ESPN-web-publica",
-        "version_motor": "4.3",
+        "version_motor": "4.4",
         "api_deportiva": False,
         "openai_api": False,
         "requiere_claves": False,
@@ -1620,21 +1717,29 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
         referee_stats = {"yellow_pg": None, "red_pg": None, "source_url": None}
 
     # Fuerza actual. Prestigio histórico = 0%.
+    # En competiciones continentales no se comparan directamente posiciones
+    # de ligas nacionales diferentes: el peso de tabla baja a 3%.
+    continental = is_continental_competition(fixture.get("competition") or "")
+    table_weight = 0.03 if continental else 0.11
+    recent10_weight = 0.32 if continental else 0.28
+    recent5_weight = 0.23 if continental else 0.20
+    venue_weight = 0.16 if continental else 0.15
+
     h_strength = (
-        0.28 * h10["ppg"]
-        + 0.20 * h5["ppg"]
+        recent10_weight * h10["ppg"]
+        + recent5_weight * h5["ppg"]
         + 0.16 * (h10["gf"] - h10["ga"] + 1.4)
-        + 0.15 * hvenue["ppg"]
-        + 0.11 * (table_score(home_stand) + 1)
-        + 0.18  # localía actual
+        + venue_weight * hvenue["ppg"]
+        + table_weight * (table_score(home_stand) + 1)
+        + 0.18
         - injury_penalty(home_inj.get("count"))
     )
     a_strength = (
-        0.28 * a10["ppg"]
-        + 0.20 * a5["ppg"]
+        recent10_weight * a10["ppg"]
+        + recent5_weight * a5["ppg"]
         + 0.16 * (a10["gf"] - a10["ga"] + 1.4)
-        + 0.15 * avenue["ppg"]
-        + 0.11 * (table_score(away_stand) + 1)
+        + venue_weight * avenue["ppg"]
+        + table_weight * (table_score(away_stand) + 1)
         - injury_penalty(away_inj.get("count"))
     )
 
@@ -1829,6 +1934,8 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
         "advertencias": warnings,
         "cache": False,
         "prestigio_historico_peso": 0,
+        "tabla_peso_modelo": round(table_weight * 100),
+        "partido_internacional": continental,
     }
     cache_set(key, result)
     return result
