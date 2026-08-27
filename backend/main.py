@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 APP_NAME = "Radar Fútbol"
-APP_VERSION = "4.6-web-directa"
+APP_VERSION = "4.7"
 TZ = ZoneInfo("America/Santiago")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT, "frontend")
@@ -48,7 +48,7 @@ CONTEXT_TTL = 20 * 60
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Safari/537.36 "
-    "RadarFutbol/4.6"
+    "RadarFutbol/4.7"
 )
 HEADERS = {
     "User-Agent": USER_AGENT,
@@ -1738,9 +1738,8 @@ async def health():
         "app": APP_NAME,
         "version": APP_VERSION,
         "hora_chile": now_chile().strftime("%Y-%m-%d %H:%M"),
-        "modo": "web-directa",
         "buscador": "ESPN-web-publica",
-        "version_motor": "4.6",
+        "version_motor": "4.7",
         "api_deportiva": False,
         "openai_api": False,
         "requiere_claves": False,
@@ -1937,35 +1936,36 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
     reliability = quality
     missing_critical = []
 
+    # Faltantes reducen la confiabilidad de forma moderada; nunca bloquean el análisis.
     if not odds.get("prob"):
-        reliability -= 8
+        reliability -= 3
         missing_critical.append("cuotas 1X2")
 
     if not context.get("referee"):
-        reliability -= 8
+        reliability -= 3
         missing_critical.append("árbitro")
     elif referee_stats.get("yellow_pg") is None:
-        reliability -= 4
+        reliability -= 2
         missing_critical.append("estadísticas del árbitro")
 
     if not context.get("var"):
-        reliability -= 2
+        reliability -= 1
         missing_critical.append("VAR")
 
     if home_inj.get("count") is None:
-        reliability -= 6
+        reliability -= 2
         missing_critical.append(f"bajas {home_name}")
     if away_inj.get("count") is None:
-        reliability -= 6
+        reliability -= 2
         missing_critical.append(f"bajas {away_name}")
 
     if home_disc.get("yellow_pg") is None or away_disc.get("yellow_pg") is None:
-        reliability -= 8
-        missing_critical.append("estadísticas disciplinarias")
+        reliability -= 4
+        missing_critical.append("estadísticas de tarjetas")
 
     if len(home_results) < 5 or len(away_results) < 5:
-        reliability -= 10
-        missing_critical.append("forma reciente suficiente")
+        reliability -= 7
+        missing_critical.append("forma reciente")
 
     reliability = int(clamp(reliability, 0, 100))
     reliability_label = reliability_level(reliability)
@@ -2006,18 +2006,8 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
     warnings = []
     if missing_critical:
         warnings.append(
-            "Análisis parcial: se entrega igualmente, pero la confiabilidad fue reducida por datos críticos no confirmados."
+            "Faltan algunos datos; el análisis se realizó igualmente con una confiabilidad ligeramente menor."
         )
-    if not odds.get("prob"):
-        warnings.append("No se encontraron cuotas 1X2 públicas y estructuradas; Ganador y Doble Oportunidad no podrán tener confianza Alta.")
-    if not context.get("referee"):
-        warnings.append("Árbitro no confirmado; las probabilidades de tarjetas se muestran sin indicador de confianza.")
-    elif referee_stats.get("yellow_pg") is None:
-        warnings.append("Árbitro confirmado, pero sin una estadística de tarjetas por partido suficientemente clara; tarjetas quedan como máximo en confianza Media.")
-    if not context.get("var"):
-        warnings.append("VAR no confirmado; las probabilidades de tarjetas se muestran sin indicador de confianza.")
-    if home_inj.get("count") is None or away_inj.get("count") is None:
-        warnings.append("Alguna fuente de bajas no respondió o no entregó una lista actual legible; Ganador y Doble Oportunidad no podrán tener confianza Alta.")
 
     # Topes de confianza según datos críticos de cada mercado.
     winner_cap = "Alta"
@@ -2027,16 +2017,10 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
 
     if missing_odds:
         winner_cap = "Media"
-        winner_reason_parts.append("faltan cuotas 1X2")
+        winner_reason_parts.append("sin cuotas 1X2")
     if missing_injuries:
         winner_cap = "Media"
-        winner_reason_parts.append("faltan bajas confirmadas")
-    # Si faltan simultáneamente mercado y bajas, el pronóstico 1/X/2
-    # sigue mostrándose pero no puede superar confianza Baja.
-    if missing_odds and missing_injuries:
-        winner_cap = "Baja"
-    if home_inj.get("count") is None and away_inj.get("count") is None:
-        winner_cap = "Baja"
+        winner_reason_parts.append("sin bajas confirmadas")
     if len(home_results) < 5 or len(away_results) < 5:
         winner_cap = "Baja"
         winner_reason_parts.append("forma reciente insuficiente")
@@ -2048,22 +2032,21 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
     cards_reason_parts = []
     if home_disc.get("yellow_pg") is None or away_disc.get("yellow_pg") is None:
         cards_cap = "Baja"
-        cards_reason_parts.append("faltan estadísticas disciplinarias de equipos")
+        cards_reason_parts.append("sin estadísticas de tarjetas")
     elif not context.get("referee") or referee_stats.get("yellow_pg") is None:
         cards_cap = "Media"
-        cards_reason_parts.append("falta árbitro confirmado o su promedio disciplinario")
+        cards_reason_parts.append("sin datos arbitrales completos")
 
     reds_cap = cards_cap
     if cards_cap == "Alta" and referee_stats.get("red_pg") is None:
         reds_cap = "Media"
-        cards_reason_parts.append("falta promedio de rojas del árbitro")
+        cards_reason_parts.append("sin promedio de rojas del árbitro")
 
     # La probabilidad de tarjetas se sigue mostrando, pero si falta Árbitro o VAR
     # no se publica ningún color/nivel de confianza para esos mercados.
     show_cards_confidence = bool(context.get("referee") and context.get("var"))
 
     result = {
-        "modo": "web-directa",
         "local": home_name,
         "visita": away_name,
         "fecha_chile": fecha,
@@ -2091,18 +2074,12 @@ async def analyze_next(team_id: int, name: str = Query(default="", max_length=10
         "arbitro_amarillas_pg": referee_stats.get("yellow_pg"),
         "arbitro_rojas_pg": referee_stats.get("red_pg"),
         "cuotas_1x2": odds.get("raw"),
-        "calidad_datos": quality,
         "confiabilidad_analisis": reliability,
         "nivel_confiabilidad_analisis": reliability_label,
-        "datos_criticos_faltantes": missing_critical,
-        "analisis_parcial": bool(missing_critical),
+        "datos_no_encontrados": missing_critical,
         "actualizado_chile": now_chile().strftime("%d/%m/%Y %H:%M"),
         "fuentes": clean_sources,
-        "advertencias": warnings,
         "cache": False,
-        "prestigio_historico_peso": 0,
-        "tabla_peso_modelo": round(table_weight * 100),
-        "partido_internacional": continental,
     }
     cache_set(key, result)
     return result
