@@ -12,20 +12,16 @@
 <title>Radar Fútbol</title>
 <style>
 :root{--bg:#09070a;--panel:#151017;--panel2:#1d1119;--line:#3a2330;--muted:#b9a6b1;--mag:#bb1260;--crimson:#7f0b34;--green:#33d17a;--yellow:#f7c84a;--red:#ff5c72;--pink:#ff8fbd}
-*{box-sizing:border-box}html{background:var(--bg);color-scheme:dark}body{margin:0;background:radial-gradient(circle at 10% 0,#311020 0,transparent 33%),linear-gradient(#0b080b,#09070a 60%);color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;min-height:100vh}.wrap{width:min(100%,680px);margin:auto;padding:calc(22px + env(safe-area-inset-top)) 15px calc(32px + env(safe-area-inset-bottom))}.brand{display:flex;justify-content:space-between;align-items:center;gap:12px}.title{font-size:31px;font-weight:950;letter-spacing:-1.1px}.title span{color:var(--pink)}.pill{border:1px solid #603047;background:#1b0e15;border-radius:999px;padding:7px 10px;font-size:10px;font-weight:900;letter-spacing:.6px;color:#ffbbd7}.subtitle{margin-top:4px;color:var(--muted);font-size:11px}.notice{margin-top:16px;border:1px solid #492435;background:linear-gradient(180deg,#1b1017,#120d12);border-radius:15px;padding:12px;color:#e6d4de;font-size:12px;line-height:1.55}.panel{margin-top:16px;border:1px solid var(--line);background:#140e16;border-radius:19px;padding:13px}.label{font-weight:900;font-size:14px;margin-bottom:8px}.searchrow{display:grid;grid-template-columns:1fr auto;gap:8px}.searchrow input{min-width:0;height:49px;border:1px solid var(--line);border-radius:14px;background:#0e0b10;color:#fff;padding:0 13px;outline:none;font-size:16px}.searchrow button{height:49px;border:0;border-radius:14px;padding:0 17px;color:#fff;font-weight:900;background:linear-gradient(100deg,var(--mag),var(--crimson));cursor:pointer}.status{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px;margin:9px 2px 0}.results{margin-top:10px;border:1px solid var(--line);border-radius:15px;overflow:hidden;display:none}.result{display:flex;align-items:center;gap:10px;width:100%;padding:10px;border:0;border-bottom:1px solid #33202d;background:#171018;color:#fff;text-align:left;cursor:pointer}.result:last-child{border-bottom:0}.result img{width:36px;height:36px;object-fit:contain}.result small{display:block;color:var(--muted);margin-top:2px}.section{font-size:18px;font-weight:900;margin:20px 0 10px}.empty,.loading,.error{border:1px solid var(--line);background:#150e17;border-radius:17px;padding:15px;color:var(--muted);font-size:13px;line-height:1.55}.error{border-color:#71273b;color:#ffc4cf}.card{border:1px solid var(--line);background:linear-gradient(180deg,var(--panel2),var(--panel));border-radius:21px;padding:14px;box-shadow:0 14px 30px rgba(0,0,0,.18)}.top{display:flex;justify-content:space-between;gap:10px}.time{font-size:28px;font-weight:950;color:var(--pink);font-variant-numeric:tabular-nums}.date{font-size:11px;color:#d7bdca;margin-top:2px}.comp{text-align:right;font-size:10px;color:var(--muted);line-height:1.4;max-width:48%}.match{font-size:18px;font-weight:900;margin:10px 0 12px}.vs{color:#c594aa}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{background:#0d0a0f;border:1px solid #38222f;border-radius:14px;padding:10px;min-height:102px}.name{font-size:11px;color:#cdb8c5;line-height:1.15;min-height:27px}.row{display:flex;align-items:end;justify-content:space-between;gap:5px}.val{font-size:17px;font-weight:950;white-space:nowrap}.pct{font-size:25px;font-weight:950;color:var(--pink);font-variant-numeric:tabular-nums;white-space:nowrap}.metric-conf{display:flex;align-items:center;gap:5px;margin-top:8px;color:#cdb8c5;font-size:10px}.limited{margin-top:6px;font-size:9px;line-height:1.25;color:#d6aebd}.dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}.high{background:var(--green)}.medium{background:var(--yellow)}.low{background:var(--red)}.details{margin-top:12px;padding-top:12px;border-top:1px solid #3c2232;color:#d9c5d1;font-size:12px;line-height:1.65}.detail-title{font-weight:900;color:#fff;margin:10px 0 3px}.sources{margin-top:13px;padding-top:12px;border-top:1px solid #3c2232}.source{display:block;text-decoration:none;color:#ffd0e2;border:1px solid #3a2330;background:#100b11;border-radius:11px;padding:9px 10px;margin-top:7px;font-size:11px;line-height:1.4}.source small{display:block;color:#9f8b96;margin-bottom:2px}.warnings{margin-top:10px;padding:10px;border:1px solid #5d3d22;background:#1a120b;border-radius:11px;color:#f5d8aa;font-size:11px;line-height:1.5}.legend{margin-top:16px;border:1px solid #3b2231;border-radius:15px;padding:12px;background:#100b11;color:#bfaeba;font-size:11px;line-height:1.55}.cache{margin-top:9px;color:#d7bdca;font-size:11px}.webbadge{color:#7ee2ab}@media(min-width:800px){.wrap{max-width:900px}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+*{box-sizing:border-box}html{background:var(--bg);color-scheme:dark}body{margin:0;background:linear-gradient(180deg,rgba(7,5,8,.88),rgba(8,6,10,.92)),radial-gradient(circle at 12% 0,rgba(92,10,43,.45) 0,transparent 34%),url("/bg-radar-v47.png") center center/cover no-repeat fixed;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;min-height:100vh;position:relative}.body::before{}body:before{content:"";position:fixed;inset:0;background:linear-gradient(180deg,rgba(8,6,10,.12),rgba(8,6,10,.28)),radial-gradient(circle at 84% 78%,rgba(187,18,96,.10) 0,transparent 30%),radial-gradient(circle at 10% 18%,rgba(255,143,189,.08) 0,transparent 24%);pointer-events:none;z-index:0}.wrap{position:relative;z-index:1;width:min(100%,680px);margin:auto;padding:calc(22px + env(safe-area-inset-top)) 15px calc(32px + env(safe-area-inset-bottom))}.brand{display:flex;justify-content:space-between;align-items:center;gap:12px}.title{font-size:31px;font-weight:950;letter-spacing:-1.1px;text-shadow:0 4px 14px rgba(0,0,0,.35)}.title span{color:var(--pink)}.pill{border:1px solid rgba(255,187,215,.28);background:rgba(23,11,18,.72);backdrop-filter:blur(8px);border-radius:999px;padding:7px 10px;font-size:10px;font-weight:900;letter-spacing:.6px;color:#ffbbd7;box-shadow:0 10px 30px rgba(0,0,0,.18)}.subtitle{margin-top:4px;color:#d5c1cd;font-size:11px;text-shadow:0 2px 8px rgba(0,0,0,.25)}.notice{margin-top:16px;border:1px solid #492435;background:linear-gradient(180deg,#1b1017,#120d12);border-radius:15px;padding:12px;color:#e6d4de;font-size:12px;line-height:1.55}.versionline{margin:8px 0 15px;color:#a995a0;font-size:10px}.panel{margin-top:16px;border:1px solid rgba(90,33,57,.92);background:rgba(20,14,22,.74);backdrop-filter:blur(10px);border-radius:19px;padding:13px;box-shadow:0 20px 36px rgba(0,0,0,.22)}.label{font-weight:900;font-size:14px;margin-bottom:8px}.searchrow{display:grid;grid-template-columns:1fr auto;gap:8px}.searchrow input{min-width:0;height:49px;border:1px solid rgba(82,46,64,.95);border-radius:14px;background:rgba(14,11,16,.82);color:#fff;padding:0 13px;outline:none;font-size:16px;backdrop-filter:blur(6px)}.searchrow button{height:49px;border:0;border-radius:14px;padding:0 17px;color:#fff;font-weight:900;background:linear-gradient(100deg,var(--mag),var(--crimson));cursor:pointer;box-shadow:0 10px 18px rgba(127,11,52,.22)}.status{display:flex;justify-content:space-between;gap:8px;color:#ccb8c4;font-size:11px;margin:9px 2px 0}.results{margin-top:10px;border:1px solid rgba(82,46,64,.92);border-radius:15px;overflow:hidden;display:none;background:rgba(17,11,17,.72);backdrop-filter:blur(12px)}.result{display:flex;align-items:center;gap:10px;width:100%;padding:10px;border:0;border-bottom:1px solid #33202d;background:#171018;color:#fff;text-align:left;cursor:pointer}.result:last-child{border-bottom:0}.result img{width:36px;height:36px;object-fit:contain}.result small{display:block;color:var(--muted);margin-top:2px}.section{font-size:18px;font-weight:900;margin:20px 0 10px;text-shadow:0 3px 10px rgba(0,0,0,.25)}.empty,.loading,.error{border:1px solid rgba(79,44,62,.96);background:rgba(21,14,23,.72);backdrop-filter:blur(10px);border-radius:17px;padding:15px;color:#d8c7d1;font-size:13px;line-height:1.55;box-shadow:0 16px 28px rgba(0,0,0,.18)}.error{border-color:#71273b;color:#ffc4cf}.card{border:1px solid rgba(82,46,64,.95);background:linear-gradient(180deg,rgba(29,17,25,.84),rgba(21,16,23,.78));backdrop-filter:blur(10px);border-radius:21px;padding:14px;box-shadow:0 18px 34px rgba(0,0,0,.25)}.top{display:flex;justify-content:space-between;gap:10px}.time{font-size:28px;font-weight:950;color:var(--pink);font-variant-numeric:tabular-nums}.date{font-size:11px;color:#d7bdca;margin-top:2px}.comp{text-align:right;font-size:10px;color:#d0bcc7;line-height:1.4;max-width:48%}.match{font-size:18px;font-weight:900;margin:10px 0 12px}.vs{color:#c594aa}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{background:rgba(13,10,15,.82);border:1px solid rgba(56,34,47,.98);backdrop-filter:blur(8px);border-radius:14px;padding:10px;min-height:102px}.name{font-size:11px;color:#d3c0cb;line-height:1.15;min-height:27px}.row{display:flex;align-items:end;justify-content:space-between;gap:5px}.val{font-size:17px;font-weight:950;white-space:nowrap}.pct{font-size:25px;font-weight:950;color:var(--pink);font-variant-numeric:tabular-nums;white-space:nowrap}.metric-conf{display:flex;align-items:center;gap:5px;margin-top:8px;color:#cdb8c5;font-size:10px}.limited{margin-top:6px;font-size:9px;line-height:1.25;color:#d6aebd}.dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}.high{background:var(--green)}.medium{background:var(--yellow)}.low{background:var(--red)}.reliability{margin-top:12px;padding:10px 12px;border:1px solid rgba(82,46,64,.9);background:rgba(16,11,17,.72);backdrop-filter:blur(8px);border-radius:14px;color:#eadce4;font-size:12px;line-height:1.5}.partial{margin-top:6px;color:#cdb4bf;font-size:11px}.details{margin-top:12px;padding-top:12px;border-top:1px solid #3c2232;color:#e0ced8;font-size:12px;line-height:1.65}.detail-title{font-weight:900;color:#fff;margin:10px 0 3px}.sources{margin-top:13px;padding-top:12px;border-top:1px solid #3c2232}.source{display:block;text-decoration:none;color:#ffd0e2;border:1px solid rgba(58,35,48,.95);background:rgba(16,11,17,.76);backdrop-filter:blur(8px);border-radius:11px;padding:9px 10px;margin-top:7px;font-size:11px;line-height:1.4}.source small{display:block;color:#9f8b96;margin-bottom:2px}.warnings{margin-top:10px;padding:10px;border:1px solid #5d3d22;background:#1a120b;border-radius:11px;color:#f5d8aa;font-size:11px;line-height:1.5}.legend{margin-top:16px;border:1px solid rgba(59,34,49,.95);border-radius:15px;padding:12px;background:rgba(16,11,17,.72);backdrop-filter:blur(10px);color:#d1c0ca;font-size:11px;line-height:1.55;box-shadow:0 16px 30px rgba(0,0,0,.18)}.cache{margin-top:9px;color:#d7bdca;font-size:11px}.webbadge{color:#7ee2ab}@media(min-width:800px){.wrap{max-width:900px}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
 </style>
 </head>
 <body>
 <main class="wrap">
   <div class="brand">
     <div class="title">Radar <span>Fútbol</span></div>
-    <div class="pill" id="pill">WEB DIRECTA</div>
+    <div class="pill" id="pill">v4.7</div>
   </div>
-  <div class="subtitle">Hora de Chile · formato 24 h · prestigio histórico: 0%</div>
-
-  <div class="notice">
-    <b>Versión 4.6 — Web directa:</b> no usa API-Sports ni una API deportiva de pago. La consulta comienza sólo cuando buscas y seleccionas un equipo. Las fuentes pueden variar según disponibilidad pública. La confianza se limita automáticamente cuando faltan datos críticos. En torneos internacionales, las posiciones de ligas nacionales distintas tienen peso reducido. Si faltan bajas, el análisis se entrega con confiabilidad reducida. Si faltan árbitro o VAR, Tarjetas Amarillas y Tarjetas Rojas mantienen su porcentaje pero no muestran color de confianza.
-  </div>
+  <div class="subtitle">Hora de Chile · formato 24 h</div>
 
   <section class="panel">
     <div class="label">Buscar equipo</div>
@@ -42,14 +38,22 @@
 
   <h2 class="section">Análisis del próximo encuentro</h2>
   <div id="content" class="empty">
-    Escribe un club y pulsa <b>Buscar</b>. Después selecciona el equipo correcto. Radar Fútbol leerá páginas web públicas y calculará los seis mercados.
+    Escribe un club y pulsa <b>Buscar</b>. Después selecciona el equipo correcto para analizar su próximo partido.
   </div>
 
   <div class="legend">
+    <b>Guía de nomenclatura</b><br><br>
+    <b>1</b> = gana el local · <b>X</b> = empate · <b>2</b> = gana la visita.<br>
+    <b>1X</b> = local o empate · <b>X2</b> = empate o visita · <b>12</b> = gana uno de los dos, sin empate.<br>
     <b>G</b> = Ganado · <b>E</b> = Empatado · <b>P</b> = Perdido.<br>
-    +3,5 = 4 o más · −3,5 = 3 o menos.<br>
-    Confianza: 🟢 Alta · 🟡 Media · 🔴 Baja. Si un mercado no muestra color, faltan datos críticos para calificar su confianza.<br>
-    Las probabilidades son estimaciones estadísticas, no garantías.
+    <b>Ambos Marcan — Sí</b> = los dos equipos anotan al menos un gol · <b>No</b> = uno o ambos no anotan.<br>
+    <b>+2,5</b> = 3 o más · <b>−2,5</b> = 2 o menos · <b>+3,5</b> = 4 o más · <b>−3,5</b> = 3 o menos.<br>
+    <b>Cuotas 1X2</b> = cuotas del mercado para Local / Empate / Visita.<br>
+    <b>Bajas</b> = lesionados o suspendidos encontrados para el partido.<br>
+    <b>VAR</b> = árbitro asistente de video.<br>
+    <b>Confianza:</b> 🟢 Alta · 🟡 Media · 🔴 Baja.<br>
+    <b>Sin color:</b> se calcula el porcentaje, pero faltan datos arbitrales suficientes para calificar la confianza de tarjetas.<br>
+    <b>%</b> = probabilidad estimada; no representa una garantía de resultado.
   </div>
 </main>
 <script>
@@ -59,8 +63,6 @@ const esc=s=>String(s??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 
 function metric(name,obj){
   const show=obj?.mostrar_confianza!==false && !!obj?.confianza;
-  const limited=show && obj?.confianza_limitada && obj?.motivo_confianza
-    ? `<div class="limited">Confianza limitada: ${esc(obj.motivo_confianza)}</div>`:"";
   const confidence=show
     ? `<div class="metric-conf"><span class="dot ${confClass(obj.confianza)}"></span>${esc(obj.confianza)}</div>`
     : "";
@@ -68,7 +70,6 @@ function metric(name,obj){
     <div class="name">${esc(name)}</div>
     <div class="row"><div class="val">${esc(obj?.seleccion??"—")}</div><div class="pct">${Math.round(obj?.probabilidad??0)}%</div></div>
     ${confidence}
-    ${limited}
   </div>`;
 }
 function form(s){return s?esc(s.split("").join(" · ")):"—"}
@@ -79,8 +80,8 @@ async function health(){
     const r=await fetch("/api/health",{cache:"no-store"});
     const d=await r.json();
     if(d.ok && String(d.modo||"").startsWith("web-directa")){
-      $("health").innerHTML='<span class="webbadge">Web directa activa</span>';
-      $("pill").textContent="WEB DIRECTA";
+      $("health").innerHTML='<span class="webbadge">Conexión activa</span>';
+      $("pill").textContent="v4.7";
     }else throw new Error();
   }catch{
     $("health").textContent="Backend sin conexión";
@@ -90,7 +91,6 @@ async function health(){
 
 function render(p){
   const sources=(p.fuentes||[]).map(s=>`<a class="source" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><small>${esc(s.tipo)}</small>${esc(s.titulo)}</a>`).join("");
-  const warnings=(p.advertencias||[]).length?`<div class="warnings">${p.advertencias.map(x=>`• ${esc(x)}`).join("<br>")}</div>`:"";
   const odds=p.cuotas_1x2?.length===3?`${p.cuotas_1x2.map(x=>Number(x).toFixed(2)).join(" · ")}`:"No disponibles";
   $("content").innerHTML=`<article class="card">
     <div class="top">
@@ -107,8 +107,8 @@ function render(p){
       ${metric("Goles Totales",p.goles_totales)}
     </div>
     <div class="reliability">
-      Confiabilidad del análisis: <b>${esc(p.confiabilidad_analisis??p.calidad_datos)}%</b> · ${esc(p.nivel_confiabilidad_analisis??"—")}
-      ${p.analisis_parcial?`<div class="partial">Análisis parcial: faltan ${esc((p.datos_criticos_faltantes||[]).join(", "))}.</div>`:""}
+      Confiabilidad: <b>${esc(p.confiabilidad_analisis)}%</b> · ${esc(p.nivel_confiabilidad_analisis??"—")}
+      ${p.datos_no_encontrados?.length?`<div class="partial">Datos no encontrados: ${esc(p.datos_no_encontrados.join(", "))}.</div>`:""}
     </div>
     <div class="details">
       <div class="detail-title">Forma y tabla</div>
@@ -124,11 +124,9 @@ function render(p){
       Árbitro: ${esc(p.arbitro??"No confirmado")}<br>
       ${p.arbitro_amarillas_pg!=null?`Promedio árbitro: ${Number(p.arbitro_amarillas_pg).toFixed(2)} amarillas/partido${p.arbitro_rojas_pg!=null?` · ${Number(p.arbitro_rojas_pg).toFixed(2)} rojas/partido`:""}<br>`:""}
       VAR: ${esc(p.var??"No confirmado")}<br>
-      Cuotas 1/X/2 encontradas: ${esc(odds)}<br>
-      Cobertura de datos: <b>${esc(p.calidad_datos)}%</b><br>Confiabilidad ajustada: <b>${esc(p.confiabilidad_analisis??p.calidad_datos)}%</b><br>
-      Prestigio histórico en el modelo: <b>0%</b>
-      ${p.cache?'<div class="cache">Este análisis salió de caché para evitar repetir descargas web.</div>':''}
-      ${warnings}
+      Cuotas 1/X/2: ${esc(odds)}<br>
+
+      ${p.cache?'<div class="cache">Se muestra un análisis reciente guardado temporalmente.</div>':''}
       <div class="sources"><div class="detail-title">Fuentes consultadas</div>${sources||"No se pudieron mostrar enlaces de fuentes."}</div>
     </div>
   </article>`;
